@@ -51,6 +51,8 @@ curl -fsS http://127.0.0.1:8787/healthz
 ```
 
 Open the library and read a PDF from the share.
+Pageium scans the books folder when the service starts.
+After adding or removing PDFs, select **Rescan library** on the library page.
 Restart the service after replacing the host mount so the container binds the mounted share.
 The directory at `~/.local/share/pageium/state` holds the reading history.
 To stop the service while keeping the reading history, run `systemctl --user stop pageium.service`.

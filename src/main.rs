@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
@@ -49,10 +49,7 @@ async fn main() -> Result<()> {
         .context("Bind Pageium listener")?;
     let scanning = app.clone();
     tokio::spawn(async move {
-        loop {
-            scanning.refresh().await;
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
+        scanning.refresh().await;
     });
     tracing::info!(listen = %listener.local_addr()?, "Pageium listening");
     axum::serve(listener, app.router())

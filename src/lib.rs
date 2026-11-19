@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use axum::Router;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use books::{Catalog, Source};
 use progress::Store;
@@ -32,8 +32,14 @@ pub struct Pageium {
 struct Service {
     source: Arc<Source>,
     catalog: RwLock<Arc<Catalog>>,
-    scan: Mutex<()>,
+    scan: Mutex<Option<broadcast::Sender<ScanOutcome>>>,
     progress: Store,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScanOutcome {
+    Ready,
+    Unavailable,
 }
 
 impl Pageium {
@@ -65,7 +71,7 @@ impl Pageium {
             state: Arc::new(Service {
                 source: Arc::new(Source { books, smb_mount }),
                 catalog: RwLock::new(Arc::new(Catalog::Scanning)),
-                scan: Mutex::new(()),
+                scan: Mutex::new(None),
                 progress,
             }),
             web: paths.web,
@@ -73,8 +79,42 @@ impl Pageium {
     }
 
     pub async fn refresh(&self) {
-        let _scan = self.state.scan.lock().await;
-        let source = Arc::clone(&self.state.source);
+        self.state.refresh().await;
+    }
+
+    pub fn router(&self) -> Router {
+        web::router(Arc::clone(&self.state), &self.web)
+    }
+}
+
+impl Service {
+    async fn refresh(self: &Arc<Self>) -> ScanOutcome {
+        self.start_scan()
+            .await
+            .recv()
+            .await
+            .unwrap_or(ScanOutcome::Unavailable)
+    }
+
+    async fn start_scan(self: &Arc<Self>) -> broadcast::Receiver<ScanOutcome> {
+        let mut active = self.scan.lock().await;
+        if let Some(finished) = active.as_ref() {
+            return finished.subscribe();
+        }
+        let (finished, receiver) = broadcast::channel(1);
+        *active = Some(finished.clone());
+        let service = Arc::clone(self);
+        tokio::spawn(async move {
+            let outcome = service.scan_catalog().await;
+            let mut active = service.scan.lock().await;
+            let _ = finished.send(outcome);
+            *active = None;
+        });
+        receiver
+    }
+
+    async fn scan_catalog(&self) -> ScanOutcome {
+        let source = Arc::clone(&self.source);
         let catalog = match tokio::task::spawn_blocking(move || source.index()).await {
             Ok(Ok(books)) => Catalog::ready(books),
             Ok(Err(error)) => {
@@ -86,11 +126,16 @@ impl Pageium {
                 Catalog::Unavailable
             }
         };
-        *self.state.catalog.write().await = Arc::new(catalog);
-    }
-
-    pub fn router(&self) -> Router {
-        web::router(Arc::clone(&self.state), &self.web)
+        let mut current = self.catalog.write().await;
+        if matches!(catalog, Catalog::Ready { .. }) {
+            *current = Arc::new(catalog);
+            ScanOutcome::Ready
+        } else {
+            if !matches!(current.as_ref(), Catalog::Ready { .. }) {
+                *current = Arc::new(catalog);
+            }
+            ScanOutcome::Unavailable
+        }
     }
 }
 
@@ -104,5 +149,38 @@ fn resolve_path(path: &Path) -> io::Result<PathBuf> {
             Ok(resolve_path(parent)?.join(name))
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shares_an_active_scan_after_the_first_request_disconnects() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let books = root.path().join("books");
+        fs::create_dir(&books)?;
+        let app = Pageium::open(Paths {
+            books,
+            state: root.path().join("state"),
+            web: root.path().join("web"),
+            smb_mount: None,
+        })?;
+
+        let first = app.state.start_scan().await;
+        let mut joined = app.state.start_scan().await;
+        assert!(first.same_channel(&joined));
+        drop(first);
+        assert_eq!(joined.recv().await?, ScanOutcome::Ready);
+        assert!(matches!(
+            app.state.catalog.read().await.as_ref(),
+            Catalog::Ready { .. }
+        ));
+
+        let mut next = app.state.start_scan().await;
+        assert!(!next.same_channel(&joined));
+        assert_eq!(next.recv().await?, ScanOutcome::Ready);
+        Ok(())
     }
 }

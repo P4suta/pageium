@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::map_response,
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -15,7 +15,7 @@ use tokio_util::io::ReaderStream;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use crate::{
-    Service,
+    ScanOutcome, Service,
     books::{Book, Catalog},
     progress::Position,
     range::{RequestRange, Span},
@@ -34,6 +34,7 @@ pub(crate) fn router(service: Arc<Service>, web: &Path) -> Router {
     Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .route("/api/library", get(library))
+        .route("/api/library/scan", post(scan_library))
         .route("/api/books/{id}", get(book))
         .route("/api/books/{id}/pdf", get(pdf).head(pdf))
         .route("/api/books/{id}/progress", put(save_position))
@@ -198,6 +199,13 @@ async fn library(
         Catalog::Unavailable => CatalogView::Unavailable,
     };
     Ok(Json(response).into_response())
+}
+
+async fn scan_library(State(service): State<Arc<Service>>, Json(()): Json<()>) -> StatusCode {
+    match service.refresh().await {
+        ScanOutcome::Ready => StatusCode::NO_CONTENT,
+        ScanOutcome::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 #[derive(Serialize)]

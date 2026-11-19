@@ -111,6 +111,15 @@ export async function getLibrary(
 	return parseLibrary(value);
 }
 
+export async function rescanLibrary(): Promise<void> {
+	const response = await fetch("/api/library/scan", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: "null",
+	});
+	if (response.status !== 204) throw new Error("Library scan failed");
+}
+
 export function bookUrl(id: string): string {
 	return `/api/books/${encodeURIComponent(id)}`;
 }

@@ -12,11 +12,18 @@ mise x -- just audit
 The Rust tests exercise file identity, library scans, reading positions, static asset negotiation, and HTTP byte ranges.
 The process test starts the executable, requests its health endpoint, and checks graceful termination.
 
+The library scans its books folder at startup and on explicit scan requests.
+The Rust tests check that overlapping requests share a scan and that a failed scan preserves the last catalog.
+[Scan request semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-post)
+
 The browser scenarios use synthetic PDFs with Chromium and WebKit.
 They exercise resuming a book, narrow layouts, partial reads of large PDFs, corrupt PDFs, and leaving the reader during module loading.
 They check that scrolling loads batches of up to 48 books and that distant batches release their cards.
 They exercise search, visible focus after returning, and a rapid seek followed by leaving the reader during a delayed bookmark write.
 [Intersection Observer](https://www.w3.org/TR/intersection-observer/#intersection-observer-interface), [HTML search controls](https://html.spec.whatwg.org/multipage/input.html#text-(type=text)-state-and-search-state-(type=search)), [Unobscured focus](https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum.html)
+
+The rescan scenario checks that the library reports scan progress and failure, retains keyboard focus and the search query, and accepts a retry.
+[Status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html)
 
 The cover test checks full-frame sizing, constant zoom during hover, and the reduced-motion preference.
 [CSS cover sizing](https://www.w3.org/TR/css-images-3/#the-object-fit), [Animation from interactions](https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html)

@@ -1,3 +1,5 @@
+import { rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { fixturePdf, withLibrary } from "./fixtures";
 
@@ -19,6 +21,71 @@ async function returnToLibrary(page: Page): Promise<void> {
 	}
 	await page.getByRole("link", { name: "Library", exact: true }).click();
 }
+
+test("rescans the books folder from the library", async ({ page }) => {
+	const pdf = fixturePdf({ pages: 3, pagePadding: 0 });
+	await withLibrary(
+		["The Shape of Quiet"],
+		async (url, booksPath) => {
+			await page.goto(url);
+			const search = page.getByRole("searchbox", { name: "Search books" });
+			const rescan = page.getByRole("button", { name: "Rescan library" });
+			const retained = page.getByRole("link", { name: "The Shape of Quiet" });
+			const added = page.getByRole("link", { name: "The Shape of Rain" });
+			await expect(rescan).toBeVisible();
+			await expect(retained).toBeVisible();
+			await search.fill("Shape");
+			await expect(retained).toBeVisible();
+			await writeFile(join(booksPath, "The Shape of Rain.pdf"), pdf);
+			await expect(added).toHaveCount(0);
+
+			let release!: () => void;
+			const pending = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let requests = 0;
+			const endpoint = "**/api/library/scan";
+			await page.route(endpoint, async (route) => {
+				requests += 1;
+				await pending;
+				await route.continue();
+			});
+			try {
+				await rescan.focus();
+				await rescan.press("Enter");
+				await expect(rescan).toBeDisabled();
+				await expect(
+					page.getByRole("status").filter({ hasText: "Scanning for PDFs" }),
+				).toBeVisible();
+				await expect(retained).toBeVisible();
+				await rescan.press("Enter");
+			} finally {
+				release();
+			}
+			await expect(added).toBeVisible();
+			expect(requests).toBe(1);
+			await expect(search).toHaveValue("Shape");
+			await expect(rescan).toBeEnabled();
+			await expect(rescan).toBeFocused();
+			await page.unroute(endpoint);
+
+			const offline = `${booksPath}-offline`;
+			await rename(booksPath, offline);
+			await rescan.click();
+			await expect(
+				page.getByRole("status").filter({ hasText: "Could not rescan" }),
+			).toBeVisible();
+			await expect(added).toBeVisible();
+			await expect(rescan).toBeEnabled();
+			await rename(offline, booksPath);
+			await rescan.click();
+			await expect(
+				page.getByRole("status").filter({ hasText: "Scan complete" }),
+			).toBeVisible();
+		},
+		pdf,
+	);
+});
 
 test("fills the cover frame and honors reduced motion", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference" });
