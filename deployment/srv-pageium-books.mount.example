@@ -1,0 +1,9 @@
+[Unit]
+Description=Pageium books share
+
+[Mount]
+What=//nas.example/home/books
+Where=/srv/pageium/books
+Type=cifs
+Options=ro,_netdev,nosuid,nodev,noexec,credentials=/etc/pageium/smb.credentials,uid=1001,gid=1001,forceuid,forcegid,dir_mode=0550,file_mode=0440
+TimeoutSec=25

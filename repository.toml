@@ -1,0 +1,10 @@
+name = "Pageium"
+summary = "Browse scanned PDFs on a NAS and read them continuously in your browser"
+install = """
+mise trust
+mise install
+mise x -- just build"""
+usage = """
+mise x -- just serve /path/to/books"""
+copyright = "Yasunobu"
+license = "MIT OR Apache-2.0"

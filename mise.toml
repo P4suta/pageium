@@ -1,0 +1,6 @@
+[tools]
+rust = "1.100.0"
+node = "26.13.1"
+just = "1.59.0"
+"cargo:cargo-deny" = "0.20.2"
+gitleaks = "8.30.1"

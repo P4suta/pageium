@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local state and generated directories"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)\.local/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)target/''',
+  '''(^|/)web/dist/''',
+  '''(^|/)web/test-results/''',
+]

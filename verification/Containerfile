@@ -1,0 +1,18 @@
+FROM docker.io/library/rust:1.100.0-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8
+ARG TARGETARCH
+ENV CARGO_BUILD_JOBS=2
+RUN cargo install --locked --version 0.68.0 kani-verifier \
+    && cargo install --locked --version 27.1.0 cargo-mutants
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) kani_target=aarch64; kani_sha=0042d2688bf1550270def4a79c96aaeea138631818cb4ab5480120f2d51a942c ;; \
+      amd64) kani_target=x86_64; kani_sha=32e2b484d73ede0bbf64a2cf0879c4259422497d8aec4ee67d448de9ae7843d3 ;; \
+      *) exit 1 ;; \
+    esac; \
+    curl --fail --silent --show-error --location \
+      "https://github.com/model-checking/kani/releases/download/kani-0.68.0/kani-0.68.0-$kani_target-unknown-linux-gnu.tar.gz" \
+      --output /opt/kani-bundle.tar.gz; \
+    printf '%s  %s\n' "$kani_sha" /opt/kani-bundle.tar.gz | sha256sum --check
+WORKDIR /opt/pageium-dependencies
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && touch src/lib.rs && cargo fetch --locked

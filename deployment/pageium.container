@@ -1,0 +1,26 @@
+[Unit]
+Description=Pageium PDF library
+
+[Container]
+Image=localhost/pageium:local
+Pull=never
+ContainerName=pageium
+UserNS=keep-id:uid=65532,gid=65532
+User=65532
+Group=65532
+PublishPort=127.0.0.1:8787:8787
+Volume=/srv/pageium/books:/books:ro
+Volume=%h/.local/share/pageium/state:/state:rw
+Environment=PAGEIUM_SMB_MOUNT=/books
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+
+[Service]
+ExecStartPre=/usr/bin/test -r /srv/pageium/books/.
+ExecStartPre=/usr/bin/findmnt --noheadings --output TARGET --mountpoint /srv/pageium/books --types cifs,smb3
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
