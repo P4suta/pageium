@@ -153,6 +153,24 @@ h1:focus {
 	letter-spacing: -0.025em;
 }
 
+.shelf-heading-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	column-gap: 12px;
+}
+
+.shelf-scan-status {
+	flex-basis: 100%;
+	font-size: 0.875rem;
+	color: var(--muted);
+}
+
+.shelf-scan-status:not(:empty) {
+	margin-block-start: 8px;
+}
+
 .shelf-tools {
 	position: sticky;
 	inset-block-start: env(safe-area-inset-top, 0);
@@ -209,7 +227,8 @@ h1:focus {
 	padding-block: 24px 8px;
 }
 
-.shelf-more {
+.shelf-more,
+.shelf-rescan {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
@@ -224,6 +243,10 @@ h1:focus {
 	font-size: 1.125rem;
 	box-shadow: var(--control-depth);
 	cursor: pointer;
+}
+
+.shelf-rescan[aria-disabled="true"] {
+	cursor: progress;
 }
 
 .shelf-more .icon {

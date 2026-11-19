@@ -1,4 +1,4 @@
-import { getLibrary, type Library, type Position } from "./api";
+import { getLibrary, type Library, type Position, rescanLibrary } from "./api";
 import { element, icon, message } from "./dom";
 import { ShelfGrid } from "./shelf-grid";
 
@@ -12,6 +12,9 @@ interface Browse {
 export class Shelf {
 	readonly view = element("main", "library");
 	#heading = element("h1", undefined, "Library");
+	#rescan = element("button", "shelf-rescan");
+	#scanStatus = element("p", "shelf-scan-status");
+	#scanning = false;
 	#tools = element("div", "shelf-tools");
 	#input = element("input");
 	#query = "";
@@ -45,7 +48,15 @@ export class Shelf {
 		const header = element("header", "library-heading");
 		const brand = element("p", "brand");
 		brand.append(icon("book"), element("span", undefined, "Pageium"));
-		header.append(brand, this.#heading);
+		this.#rescan.type = "button";
+		this.#rescan.append(icon("scan"), "Rescan library");
+		this.#rescan.addEventListener("click", () => {
+			void this.#refresh();
+		});
+		this.#scanStatus.setAttribute("role", "status");
+		const title = element("div", "shelf-heading-row");
+		title.append(this.#heading, this.#rescan, this.#scanStatus);
+		header.append(brand, title);
 
 		const field = element("label", "shelf-search");
 		this.#input.type = "search";
@@ -84,12 +95,10 @@ export class Shelf {
 				window.scrollTo(0, scroll);
 				this.#focusBook(book);
 			}
-			this.#observeMore();
-			this.#schedule(10_000);
 		} else {
 			this.#returnBook = book;
-			await this.#load(1);
 		}
+		await this.#load(1);
 	}
 
 	pause(): void {
@@ -125,6 +134,30 @@ export class Shelf {
 		this.#schedule(170);
 	}
 
+	async #refresh(): Promise<void> {
+		if (this.#scanning) return;
+		this.#scanning = true;
+		this.#rescan.setAttribute("aria-disabled", "true");
+		this.#scanStatus.textContent = "Scanning for PDFs…";
+		try {
+			await rescanLibrary();
+			let status: Library["status"] | undefined;
+			if (this.#active) {
+				this.#cancel();
+				status = await this.#load(1);
+			}
+			this.#scanStatus.textContent =
+				status === "unavailable"
+					? "Scan complete. Could not reload the library."
+					: "Scan complete.";
+		} catch {
+			this.#scanStatus.textContent = "Could not rescan the books folder.";
+		} finally {
+			this.#scanning = false;
+			this.#rescan.removeAttribute("aria-disabled");
+		}
+	}
+
 	#discard(): void {
 		this.#observer.disconnect();
 		this.#browse = null;
@@ -144,8 +177,11 @@ export class Shelf {
 		await this.#load(browse.page + 1, manual);
 	}
 
-	async #load(page: number, manual = false): Promise<void> {
-		if (!this.#active || this.#request) return;
+	async #load(
+		page: number,
+		manual = false,
+	): Promise<Library["status"] | undefined> {
+		if (!this.#active || this.#request) return undefined;
 		window.clearTimeout(this.#timer);
 		const request = new AbortController();
 		this.#request = request;
@@ -157,7 +193,7 @@ export class Shelf {
 		} catch {
 			result = { status: "unavailable" };
 		}
-		if (request.signal.aborted) return;
+		if (request.signal.aborted) return undefined;
 		this.#request = null;
 		this.#grid.view.removeAttribute("aria-busy");
 
@@ -167,15 +203,15 @@ export class Shelf {
 		} else if (page > 1 && result.revision !== this.#browse?.revision) {
 			this.#discard();
 			window.scrollTo(0, 0);
-			await this.#load(1);
-			return;
+			return this.#load(1);
 		} else {
 			if (page > 1) this.#failed = false;
 			this.#accept(result, pin, manual);
 		}
 
 		this.#observeMore();
-		this.#schedule(result.status === "scanning" ? 550 : 10_000);
+		if (result.status === "scanning") this.#schedule(550);
+		return result.status;
 	}
 
 	#accept(
@@ -212,7 +248,10 @@ export class Shelf {
 								"Try another title or folder.",
 								"search",
 							)
-						: message("No books yet", "Save a PDF to your books folder."),
+						: message(
+								"No books yet",
+								"Save a PDF to your books folder, then select Rescan library.",
+							),
 				);
 			}
 		}
@@ -241,7 +280,7 @@ export class Shelf {
 			waiting
 				? message(
 						"Scanning for PDFs",
-						"Books will appear as they are found.",
+						"The library will appear when the scan finishes.",
 						"scan",
 					)
 				: message(

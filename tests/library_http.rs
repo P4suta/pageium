@@ -167,6 +167,57 @@ async fn shelf(app: &Pageium) -> Result<LibraryView> {
     Ok(serde_json::from_slice(&body(response).await?)?)
 }
 
+async fn scan(app: &Pageium) -> Result<StatusCode> {
+    let response = request(
+        app.router(),
+        Method::POST,
+        "/api/library/scan",
+        &[("content-type", "application/json")],
+        Body::from("null"),
+    )
+    .await?;
+    Ok(response.status())
+}
+
+#[tokio::test]
+async fn rescans_on_request_and_preserves_the_last_catalog_on_failure() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let books = fixture.directory.path().join("books");
+    fixture.app.refresh().await;
+    fs::write(books.join("New Arrival.pdf"), PDF)?;
+    assert!(shelf(&fixture.app).await?.books.is_empty());
+
+    let form = request(
+        fixture.app.router(),
+        Method::POST,
+        "/api/library/scan",
+        &[("content-type", "text/plain")],
+        Body::from("null"),
+    )
+    .await?;
+    assert_eq!(form.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(shelf(&fixture.app).await?.books.is_empty());
+
+    assert_eq!(scan(&fixture.app).await?, StatusCode::NO_CONTENT);
+    let library = shelf(&fixture.app).await?;
+    assert_eq!(library.books.len(), 1);
+    assert_eq!(library.books[0].title, "New Arrival");
+
+    let offline = fixture.directory.path().join("offline");
+    fs::rename(&books, &offline)?;
+    assert_eq!(scan(&fixture.app).await?, StatusCode::SERVICE_UNAVAILABLE);
+    let library = shelf(&fixture.app).await?;
+    assert_eq!(library.status, "ready");
+    assert_eq!(library.books.len(), 1);
+    assert_eq!(library.books[0].title, "New Arrival");
+
+    fs::rename(offline, &books)?;
+    fs::remove_file(books.join("New Arrival.pdf"))?;
+    assert_eq!(scan(&fixture.app).await?, StatusCode::NO_CONTENT);
+    assert!(shelf(&fixture.app).await?.books.is_empty());
+    Ok(())
+}
+
 #[tokio::test]
 async fn pages_and_filters_the_catalog_with_stable_bounds() -> Result<()> {
     let fixture = Fixture::empty()?;

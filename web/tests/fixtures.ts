@@ -61,7 +61,7 @@ export function fixturePdf({
 
 export async function withLibrary<T>(
 	books: readonly string[],
-	use: (url: string) => Promise<T>,
+	use: (url: string, booksPath: string) => Promise<T>,
 	pdf: Buffer = fixturePdf(),
 ): Promise<T> {
 	const root = await mkdtemp(join(tmpdir(), "pageium-browser-"));
@@ -117,7 +117,7 @@ export async function withLibrary<T>(
 					}
 				});
 			});
-			return await use(url);
+			return await use(url, shelf);
 		} finally {
 			child.kill();
 			await exit;
