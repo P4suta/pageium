@@ -1,0 +1,13 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"packageRules": [
+		{
+			"description": "The Quadlet uses the Pageium image built on the deployment host.",
+			"matchManagers": ["quadlet"],
+			"matchFileNames": ["deployment/pageium.container"],
+			"matchDepNames": ["localhost/pageium"],
+			"matchCurrentValue": "/^local$/",
+			"enabled": false
+		}
+	]
+}
