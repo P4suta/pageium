@@ -28,6 +28,11 @@ The rescan scenario checks that the library reports scan progress and failure, r
 The cover test checks full-frame sizing, constant zoom during hover, and the reduced-motion preference.
 [CSS cover sizing](https://www.w3.org/TR/css-images-3/#the-object-fit), [Animation from interactions](https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html)
 
+The press test checks inset shadows on a book card, the Fit width toggle, and the Rescan library button.
+It checks the cover dimensions while the card moves.
+With reduced motion, an inset shadow indicates a press.
+[Activation pseudo-class](https://www.w3.org/TR/selectors-4/#the-active-pseudo), [Inset shadows](https://www.w3.org/TR/css-backgrounds-3/#the-box-shadow)
+
 The reader test uses wheel gestures to check alignment near a page start and scrolling within a page taller than the reading area.
 The reader enables proximity snapping with the browser's normal motion preference.
 [CSS Scroll Snap](https://www.w3.org/TR/css-scroll-snap-1/#scroll-snap-strictness), [Tall pages](https://www.w3.org/TR/css-scroll-snap-1/#snap-overflow)
