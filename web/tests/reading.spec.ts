@@ -109,6 +109,58 @@ test("fills the cover frame and honors reduced motion", async ({ page }) => {
 	});
 });
 
+test("presses book cards and controls into the surface", async ({ page }) => {
+	await page.emulateMedia({
+		colorScheme: "light",
+		reducedMotion: "no-preference",
+	});
+	await withLibrary(["The Shape of Quiet"], async (url) => {
+		await page.goto(url);
+		const card = page.getByRole("link", { name: "The Shape of Quiet" });
+		const cover = card.locator("canvas");
+		await expect(cover).toBeVisible();
+		await card.hover();
+		await expect(card).not.toHaveCSS("box-shadow", /inset/);
+		const coverSize = () =>
+			cover.evaluate((canvas) => {
+				const { width, height } = canvas.getBoundingClientRect();
+				return { width, height };
+			});
+		const restingSize = await coverSize();
+		await page.mouse.down();
+		await expect(card).toHaveCSS("box-shadow", /inset/);
+		await expect(card).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 2)");
+		const pressedSize = await coverSize();
+		expect(pressedSize.width).toBeCloseTo(restingSize.width, 2);
+		expect(pressedSize.height).toBeCloseTo(restingSize.height, 2);
+		await page.mouse.up();
+		const first = page.getByRole("img", { name: "Page 1", exact: true });
+		await expect(first.locator("canvas")).toBeVisible();
+
+		await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+		await page.mouse.move(240, 8);
+		const fit = page.getByRole("button", { name: "Fit width" });
+		await fit.hover();
+		await expect(fit).not.toHaveCSS("box-shadow", /inset/);
+		await page.mouse.down();
+		await expect(fit).toHaveCSS("box-shadow", /inset/);
+		await expect(fit).toHaveCSS("transform", "none");
+		await page.mouse.up();
+		await expect(fit).toHaveAttribute("aria-pressed", "true");
+		await expect(fit).toHaveCSS("box-shadow", /inset/);
+
+		await returnToLibrary(page);
+		const rescan = page.getByRole("button", { name: "Rescan library" });
+		await rescan.hover();
+		await expect(rescan).not.toHaveCSS("box-shadow", /inset/);
+		await page.mouse.down();
+		await expect(rescan).toHaveCSS("box-shadow", /inset/);
+		await expect(rescan).toHaveCSS("transform", "none");
+		await page.mouse.up();
+		await expect(rescan).not.toHaveCSS("box-shadow", /inset/);
+	});
+});
+
 test("scrolls through a bounded shelf and restores the filter", async ({
 	page,
 }) => {
