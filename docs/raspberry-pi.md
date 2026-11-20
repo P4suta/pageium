@@ -1,7 +1,7 @@
 # Container deployment
 
 Pageium reads PDF originals from a mounted folder and stores reading positions in local SQLite.
-The browser renders covers and pages.
+The server caches page previews on local storage and the browser renders the original PDF at the reading scale.
 One reader on a trusted network can resume reading across browsers.
 
 ## Mount the books folder
@@ -29,7 +29,7 @@ findmnt --mountpoint /srv/pageium/books --output TARGET,FSTYPE,VFS-OPTIONS
 ## Start the container
 
 Build the image for ARM64 and tag it `localhost/pageium:local` in the Pi app account's Podman image store.
-The image includes the compiled web assets.
+The image includes the web assets, Poppler, and fallback fonts for Latin and East Asian text.
 
 ```sh
 podman build --platform linux/arm64 --tag localhost/pageium:local --file Containerfile .
@@ -52,13 +52,22 @@ curl -fsS http://127.0.0.1:8787/healthz
 
 Open the library and read a PDF from the share.
 Pageium scans the books folder when the service starts.
-After adding or removing PDFs, select **Rescan library** on the library page.
+The library opens at the configured books directory and lists its folders and PDFs.
+Create folders on the share and select **Rescan library** after adding, moving, or removing a folder or PDF.
+Each scan prepares covers for up to eight of the newest additions while the catalog remains available.
+The scan waits up to four seconds for the previews and then lets the remaining conversions finish in the background.
+Open a folder to browse its contents, or search by title or folder name within the open folder and its descendants.
+Select an ancestor in the folder path to return to it.
+Moving or renaming a PDF gives it a different reading-position identifier.
 Restart the service after replacing the host mount so the container binds the mounted share.
-The directory at `~/.local/share/pageium/state` holds the reading history.
+The state directory holds reading history in `progress.sqlite3` and up to 32 MiB of preview images in `previews.sqlite3`.
+Zoom in to eight times the fitted size with a desktop trackpad pinch, the Zoom in button, or the plus key.
+The minus key zooms out and the zero key resets the zoom level.
 To stop the service while keeping the reading history, run `systemctl --user stop pageium.service`.
 
 ## Verify a development build
 
+Install Poppler so the server can run `pdftoppm` when serving previews outside the container.
 Run `mise x -- just build` before `mise x -- just check`.
 Run `mise x -- just browser` for the headless WebKit tests.
 Run `mise x -- just advisories` for the Rust dependency advisory check.

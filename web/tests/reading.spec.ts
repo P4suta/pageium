@@ -1,7 +1,7 @@
 import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { fixturePdf, withLibrary } from "./fixtures";
+import { faxScan, fixturePdf, withLibrary } from "./fixtures";
 
 const longTitle = "海辺の町を歩くための地図と季節の記録";
 const titles = [
@@ -21,6 +21,46 @@ async function returnToLibrary(page: Page): Promise<void> {
 	}
 	await page.getByRole("link", { name: "Library", exact: true }).click();
 }
+
+test("paints the ink in a fax-compressed scan on the cover and page", async ({
+	page,
+}) => {
+	await withLibrary(
+		["Scan"],
+		async (url) => {
+			await page.goto(url);
+			for (const selector of [".cover img", ".pdf-page canvas"]) {
+				const canvas = page.locator(selector);
+				await expect(canvas).toBeVisible();
+				const levels = await canvas.evaluate((source) => {
+					const node =
+						source instanceof HTMLCanvasElement
+							? source
+							: document.createElement("canvas");
+					if (source instanceof HTMLImageElement) {
+						node.width = source.naturalWidth;
+						node.height = source.naturalHeight;
+						node.getContext("2d")?.drawImage(source, 0, 0);
+					}
+					const context = node.getContext("2d");
+					if (!context) throw new Error("Missing canvas context");
+					const pixel = (fraction: number) =>
+						context.getImageData(
+							node.width * fraction,
+							node.height * fraction,
+							1,
+							1,
+						).data[0];
+					return [pixel(0.1), pixel(0.5)];
+				});
+				expect(levels).toEqual([255, 0]);
+				if (selector === ".cover img")
+					await page.getByRole("link", { name: "Scan" }).click();
+			}
+		},
+		faxScan(),
+	);
+});
 
 test("rescans the books folder from the library", async ({ page }) => {
 	const pdf = fixturePdf({ pages: 3, pagePadding: 0 });
@@ -91,7 +131,7 @@ test("fills the cover frame and honors reduced motion", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference" });
 	await withLibrary(["The Shape of Quiet"], async (url) => {
 		await page.goto(url);
-		const canvas = page.locator(".cover canvas");
+		const canvas = page.locator(".cover img");
 		await expect(canvas).toBeVisible();
 		await expect(canvas).toHaveCSS("object-fit", "cover");
 		await expect(canvas).not.toHaveCSS("animation-name", "none");
@@ -117,7 +157,7 @@ test("presses book cards and controls into the surface", async ({ page }) => {
 	await withLibrary(["The Shape of Quiet"], async (url) => {
 		await page.goto(url);
 		const card = page.getByRole("link", { name: "The Shape of Quiet" });
-		const cover = card.locator("canvas");
+		const cover = card.locator("img");
 		await expect(cover).toBeVisible();
 		await card.hover();
 		await expect(card).not.toHaveCSS("box-shadow", /inset/);
@@ -236,17 +276,26 @@ test("renders new covers after leaving stalled thumbnails behind", async ({
 		books,
 		async (url) => {
 			let held = 0;
+			const catalog = async () =>
+				(await page.request.get(`${url}/api/library`)).json();
+			await expect.poll(async () => (await catalog()).status).toBe("ready");
+			const { books: entries } = await catalog();
+			const preview = await page.request.get(
+				`${url}/api/books/${entries[0].id}/preview/1`,
+			);
+			expect(preview.ok()).toBe(true);
+			const jpeg = await preview.body();
 			let release = (): void => {};
 			const blocked = new Promise<void>((resolve) => {
 				release = resolve;
 			});
-			await page.route("**/api/books/*/pdf", async (route) => {
+			await page.route("**/api/books/*/preview/1", async (route) => {
 				if (held < 2) {
 					held += 1;
 					await blocked;
 					await route.abort().catch(() => {});
 				} else {
-					await route.continue();
+					await route.fulfill({ contentType: "image/jpeg", body: jpeg });
 				}
 			});
 			try {
@@ -260,7 +309,7 @@ test("renders new covers after leaving stalled thumbnails behind", async ({
 				}
 				const last = page.getByRole("link", { name: "Scan 156" });
 				await last.scrollIntoViewIfNeeded();
-				await expect(last.locator("canvas")).toBeVisible();
+				await expect(last.locator("img")).toBeVisible();
 			} finally {
 				release();
 			}
@@ -329,7 +378,7 @@ test("opens a PDF at phone width, reads down, and resumes at the saved page", as
 		await page.goto(url);
 		const book = page.getByRole("link", { name: "The Shape of Quiet" });
 		await expect(book).toBeVisible();
-		await expect(book.locator("canvas")).toBeVisible();
+		await expect(book.locator("img")).toBeVisible();
 		await expect(page.locator(".books")).toHaveCSS(
 			"grid-template-columns",
 			/^\d+(?:\.\d+)?px \d+(?:\.\d+)?px$/,
@@ -577,7 +626,55 @@ test("toggles the reader controls by tapping a page", async ({ browser }) => {
 	}
 });
 
-test("aligns a nearby page start and lets the reader stop inside a tall page", async ({
+test("keeps the paper under a fast scroll across pages and back while zoomed", async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 820, height: 600 });
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await withLibrary(
+		["Mixed pages"],
+		async (url) => {
+			await page.goto(url);
+			await page.locator(".book").click();
+			await expect(
+				page
+					.getByRole("img", { name: "Page 1", exact: true })
+					.locator("canvas")
+					.first(),
+			).toBeVisible();
+			await page.keyboard.press("+");
+			await page.keyboard.press("+");
+			const pane = page.locator(".reader-scroll");
+			const samples = await pane.evaluate(async (area) => {
+				const errors: number[] = [];
+				const pages = new Set<string>();
+				const x = innerWidth / 2,
+					y = innerHeight / 2;
+				for (let frame = 0; frame < 66; frame++) {
+					const delta = frame < 38 ? 118 : -118;
+					const paper = document.elementFromPoint(x, y)?.closest(".pdf-page");
+					const rect = paper?.getBoundingClientRect();
+					area.scrollBy(0, delta);
+					await new Promise(requestAnimationFrame);
+					if (!paper || !rect) continue;
+					pages.add(paper.getAttribute("aria-label") ?? "");
+					const after = paper.getBoundingClientRect();
+					const fraction = (y - rect.top) / rect.height;
+					errors.push(
+						Math.abs(after.top + fraction * after.height - (y - delta)),
+					);
+				}
+				return { errors, pages: [...pages] };
+			});
+			expect(samples.errors.length).toBeGreaterThan(50);
+			expect(samples.pages.length).toBeGreaterThan(3);
+			expect(Math.max(...samples.errors)).toBeLessThan(2);
+		},
+		fixturePdf({ pages: 14, landscape: [3, 6], pagePadding: 0 }),
+	);
+});
+
+test("settles near fitted page starts in both directions and scrolls freely inside a tall page", async ({
 	page,
 }) => {
 	await page.setViewportSize({ width: 390, height: 844 });
@@ -589,17 +686,27 @@ test("aligns a nearby page start and lets the reader stop inside a tall page", a
 		const first = page.getByRole("img", { name: "Page 1", exact: true });
 		const second = page.getByRole("img", { name: "Page 2", exact: true });
 		await expect(first.locator("canvas")).toBeVisible();
-		const start = await second.evaluate((surface) => {
-			if (!(surface instanceof HTMLElement))
-				throw new Error("Missing page surface");
-			return surface.offsetTop;
-		});
+		const fourth = page.getByRole("img", { name: "Page 4", exact: true });
+		const start = await second.evaluate(
+			(surface: HTMLElement) => surface.offsetTop,
+		);
+		const later = await fourth.evaluate(
+			(surface: HTMLElement) => surface.offsetTop,
+		);
 		await reader.hover();
 		await page.mouse.wheel(0, start - 24);
 		await expect
 			.poll(() => reader.evaluate((area) => Math.round(area.scrollTop)))
 			.toBe(start);
 		await expect(page.locator(".page-position")).toHaveText("Page 2 of 8");
+		await page.mouse.wheel(0, later - start - 18);
+		await expect
+			.poll(() => reader.evaluate((area) => Math.round(area.scrollTop)))
+			.toBe(later);
+		await page.mouse.wheel(0, start - later + 24);
+		await expect
+			.poll(() => reader.evaluate((area) => Math.round(area.scrollTop)))
+			.toBe(start);
 
 		await page.setViewportSize({ width: 1200, height: 550 });
 		await page.getByRole("button", { name: "Reader controls" }).press("Enter");
@@ -619,7 +726,11 @@ test("aligns a nearby page start and lets the reader stop inside a tall page", a
 		const middle = Math.floor((height - visible) / 2);
 		expect(middle).toBeGreaterThan(100);
 		await reader.hover();
-		await page.mouse.wheel(0, middle);
+		await page.mouse.wheel(0, 20);
+		await expect
+			.poll(() => reader.evaluate((area) => Math.round(area.scrollTop)))
+			.toBe(20);
+		await page.mouse.wheel(0, middle - 20);
 		await expect
 			.poll(() => reader.evaluate((area) => Math.round(area.scrollTop)))
 			.toBe(middle);
@@ -627,6 +738,98 @@ test("aligns a nearby page start and lets the reader stop inside a tall page", a
 
 		await page.emulateMedia({ reducedMotion: "reduce" });
 		await expect(reader).toHaveCSS("scroll-snap-type", "none");
+	});
+});
+
+for (const mode of ["reader zoom", "reduced motion"] as const) {
+	test(`keeps a near-boundary stop while reading with ${mode}`, async ({
+		page,
+	}) => {
+		await page.setViewportSize({ width: 480, height: 720 });
+		await page.emulateMedia({
+			reducedMotion: mode === "reader zoom" ? "no-preference" : "reduce",
+		});
+		await withLibrary(["Book"], async (url) => {
+			await page.goto(url);
+			await page.getByRole("link", { name: "Book", exact: true }).click();
+			const reader = page.getByRole("main", { name: "PDF pages" });
+			await expect(reader.locator("canvas").first()).toBeVisible();
+			if (mode === "reader zoom") {
+				await page.keyboard.press("+");
+				await expect(page.locator(".reader-magnification")).toHaveText("1.5×");
+			}
+			const paper = page.getByRole("img", { name: "Page 2", exact: true });
+			const target = await paper.evaluate(
+				(el: HTMLElement) => el.offsetTop - 24,
+			);
+			const before = await reader.evaluate((area) => area.scrollTop);
+			await reader.hover();
+			await page.mouse.wheel(0, target - before);
+			await expect
+				.poll(() => reader.evaluate((area) => area.scrollTop))
+				.toBe(target);
+			const drift = await reader.evaluate(async (area, target) => {
+				let drift = 0;
+				for (let frame = 0; frame < 30; frame++) {
+					await new Promise(requestAnimationFrame);
+					drift = Math.max(drift, Math.abs(area.scrollTop - target));
+				}
+				return drift;
+			}, target);
+			expect(drift).toBeLessThan(1);
+		});
+	});
+}
+
+test("holds the reading point on returning to fit and snaps on the next page turn", async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 820, height: 600 });
+	await page.emulateMedia({ reducedMotion: "no-preference" });
+	await withLibrary(["Book"], async (url) => {
+		await page.goto(url);
+		await page.getByRole("link", { name: "Book", exact: true }).click();
+		const reader = page.getByRole("main", { name: "PDF pages" });
+		await expect(reader.locator("canvas").first()).toBeVisible();
+		await page.keyboard.press("+");
+		await expect(page.locator(".reader-magnification")).toHaveText("1.5×");
+		const paper = page.getByRole("img", { name: "Page 2", exact: true });
+		const expectedTop = await paper.evaluate((sheet) => {
+			const pane = sheet.closest("main");
+			if (!pane) throw new Error("Missing reading area");
+			const center = pane.getBoundingClientRect().top + pane.clientHeight / 2;
+			const fittedTop =
+				pane.getBoundingClientRect().top +
+				parseFloat(getComputedStyle(pane).paddingTop) -
+				24;
+			const zoomedTop = center - 1.5 * (center - fittedTop);
+			pane.scrollBy(0, sheet.getBoundingClientRect().top - zoomedTop);
+			return fittedTop;
+		});
+		await expect(paper.locator("canvas").first()).toBeVisible();
+		await page.keyboard.press("0");
+		await expect(page.locator(".reader-magnification")).toHaveText("1×");
+		const drift = await paper.evaluate(async (sheet, top) => {
+			let drift = 0;
+			for (let frame = 0; frame < 30; frame++) {
+				await new Promise(requestAnimationFrame);
+				drift = Math.max(
+					drift,
+					Math.abs(sheet.getBoundingClientRect().top - top),
+				);
+			}
+			return drift;
+		}, expectedTop);
+		expect(drift).toBeLessThan(2);
+		const next = await page
+			.getByRole("img", { name: "Page 3", exact: true })
+			.evaluate((el: HTMLElement) => el.offsetTop);
+		const current = await reader.evaluate((pane) => pane.scrollTop);
+		await reader.hover();
+		await page.mouse.wheel(0, next - current - 24);
+		await expect
+			.poll(() => reader.evaluate((pane) => Math.round(pane.scrollTop)))
+			.toBe(next);
 	});
 });
 
@@ -641,7 +844,7 @@ test("fits the tablet grid and the narrow dark shelf", async ({
 			"grid-template-columns",
 			/^(?:\d+(?:\.\d+)?px ){3}\d+(?:\.\d+)?px$/,
 		);
-		await expect(page.locator(".cover canvas")).toHaveCount(4);
+		await expect(page.locator(".cover img")).toHaveCount(4);
 		await page.screenshot({ path: info.outputPath("ipad-library.png") });
 		await page.setViewportSize({ width: 320, height: 844 });
 		await page.emulateMedia({ colorScheme: "dark" });
@@ -672,7 +875,7 @@ test("renders the first page of a large PDF with partial responses", async ({
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.goto(url);
 			const book = page.getByRole("link", { name: title });
-			await expect(book.locator("canvas")).toBeVisible();
+			await expect(book.locator("img")).toBeVisible();
 			let partialBytes = 0;
 			page.on("response", (response) => {
 				if (response.url().endsWith("/pdf") && response.status() === 206) {
@@ -735,14 +938,14 @@ test("leaving a reader while the PDF module loads cancels its document request",
 			const book = page.getByRole("link", { name: "The Shape of Quiet" });
 			await book.click();
 			await expect(
-				page.getByRole("heading", { name: "Opening PDF" }),
+				page.getByRole("img", { name: "Page 1", exact: true }),
 			).toBeVisible();
 			await returnToLibrary(page);
 			await expect(book).toBeVisible();
 			expect(documentLoads).toBe(0);
 			release();
-			await expect(book.locator("canvas")).toBeVisible();
-			expect(documentLoads).toBe(1);
+			await expect(book.locator("img")).toBeVisible();
+			expect(documentLoads).toBe(0);
 		} finally {
 			release();
 		}

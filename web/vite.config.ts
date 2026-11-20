@@ -60,6 +60,7 @@ export default defineConfig({
 						"node_modules/pdfjs-dist/LICENSE",
 					],
 					dest: "pdfjs",
+					rename: { stripBase: 2 },
 				},
 			],
 		}),
