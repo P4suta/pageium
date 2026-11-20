@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
+import { type APIRequestContext, expect } from "@playwright/test";
 
 const web = fileURLToPath(new URL("../dist", import.meta.url));
 const executable = fileURLToPath(
@@ -101,6 +102,23 @@ function pdfObjects(objects: string[]): Buffer {
 		Buffer.byteLength(pdf) +
 		"\n%%EOF\n";
 	return Buffer.from(pdf, "ascii");
+}
+
+export async function firstBookId(
+	request: APIRequestContext,
+	url: string,
+): Promise<string> {
+	let id = "";
+	await expect
+		.poll(async () => {
+			const body: { status: string; books?: { id: string }[] } = await (
+				await request.get(`${url}/api/library`)
+			).json();
+			id = body.status === "ready" ? (body.books?.[0]?.id ?? "") : "";
+			return id;
+		})
+		.toMatch(/^[a-f0-9]{64}$/);
+	return id;
 }
 
 export async function withLibrary<T>(

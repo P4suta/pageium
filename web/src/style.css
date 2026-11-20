@@ -667,9 +667,10 @@ h1:focus {
 	--page-ratio: 0.7071;
 	--reader-zoom: 1;
 	--reading-width: calc(100cqw - var(--reader-left) - var(--reader-right));
+	--reading-height: 100cqh;
 	--fitted-width: min(
 		var(--reading-width),
-		calc(100cqh * var(--active-ratio, var(--page-ratio)))
+		calc(var(--reading-height) * var(--widest-ratio, var(--page-ratio)))
 	);
 	inline-size: calc(100cqw + (var(--reader-zoom) - 1) * var(--fitted-width));
 	padding-inline: var(--reader-left) var(--reader-right);
@@ -681,7 +682,10 @@ h1:focus {
 }
 
 .pdf-page {
-	--fitted-width: min(var(--reading-width), calc(100cqh * var(--page-ratio)));
+	--fitted-width: min(
+		var(--reading-width),
+		calc(var(--reading-height) * var(--page-ratio))
+	);
 	--page-zoom: 1;
 	position: relative;
 	transform-origin: top left;
@@ -717,7 +721,8 @@ h1:focus {
 	pointer-events: none;
 }
 
-.page-preview {
+.page-preview,
+.pdf-page canvas:not(.page-detail) {
 	object-fit: contain;
 }
 

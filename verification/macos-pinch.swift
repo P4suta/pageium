@@ -1,6 +1,11 @@
 import AppKit
 import WebKit
 
+DispatchQueue.global().asyncAfter(deadline: .now() + 55) {
+  FileHandle.standardError.write(Data("Timed out verifying WebKit magnification.\n".utf8))
+  exit(1)
+}
+
 // Exercise visible-page scheduling while the test window stays behind other windows.
 final class ReaderTestWindow: NSWindow {
   override var occlusionState: NSWindow.OcclusionState { .visible }

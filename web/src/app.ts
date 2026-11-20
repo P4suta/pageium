@@ -35,7 +35,7 @@ class App {
 			const closing = previous.close();
 			this.#saving.set(id, closing);
 			if (closing.position)
-				this.#shelf.remember(id, closing.position, closing.saved);
+				this.#shelf.remember(previous.book, closing.position, closing.saved);
 			void closing.saved.then(() => {
 				if (this.#saving.get(id) === closing) this.#saving.delete(id);
 			});

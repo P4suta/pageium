@@ -5,6 +5,9 @@ Browse scanned PDFs on a NAS and read them continuously in your browser.
 ## Installation
 
 ```sh
+# On macOS, install Poppler with `brew install poppler`.
+# On Debian or Ubuntu, install Poppler with `sudo apt-get install poppler-utils`.
+pdftoppm -v
 mise trust
 mise install
 mise x -- just build

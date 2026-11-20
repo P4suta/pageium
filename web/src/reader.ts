@@ -134,7 +134,6 @@ export class Reader {
 	#defaultRatio = "";
 	#active = 0;
 	#enteredPageAt = 0;
-	#pageBounds = { top: 0, height: 1 };
 	#scrollTop = 0;
 	#scrollTimer = 0;
 	#pageSizes = new Map<PageSlot, string>();
@@ -567,19 +566,24 @@ export class Reader {
 			height !== previous.height ||
 			this.#fitWidth !== previous.fitWidth
 		) {
-			const anchor = previous && this.#slots[this.#active - 1];
-			if (anchor) {
-				const fraction = Math.max(
-					0,
-					Math.min(
-						1,
-						(this.#scroll.scrollTop - this.#pageBounds.top) /
-							this.#pageBounds.height,
-					),
-				);
+			const top = this.#scroll.scrollTop;
+			const anchor = previous && this.#slots[this.#indexAt(top)]?.surface;
+			const fraction = anchor
+				? (top - anchor.offsetTop) / Math.max(1, anchor.clientHeight)
+				: 0;
+			const stack = getComputedStyle(this.#stack);
+			const pane = getComputedStyle(this.#scroll);
+			this.#stack.style.setProperty(
+				"--reading-width",
+				`${width - Number.parseFloat(stack.paddingLeft) - Number.parseFloat(stack.paddingRight)}px`,
+			);
+			this.#stack.style.setProperty(
+				"--reading-height",
+				`${height - Number.parseFloat(pane.paddingTop) - Number.parseFloat(pane.paddingBottom)}px`,
+			);
+			if (anchor)
 				this.#scroll.scrollTop =
-					anchor.surface.offsetTop + fraction * anchor.surface.clientHeight;
-			}
+					anchor.offsetTop + fraction * anchor.clientHeight;
 			this.#scrollTop = this.#scroll.scrollTop;
 			this.#cancelPaint();
 			this.#area = { width, height, fitWidth: this.#fitWidth };
@@ -589,20 +593,23 @@ export class Reader {
 		const visibleEnd = this.#indexAt(top + height);
 		const activeSlot = this.#slots[active];
 		if (!activeSlot) return;
-		const ratio =
-			activeSlot.surface.style.getPropertyValue("--page-ratio") ||
-			this.#defaultRatio;
-		if (this.#stack.style.getPropertyValue("--active-ratio") !== ratio)
-			this.#stack.style.setProperty("--active-ratio", ratio);
 		const nearby = this.#slots.slice(
 			Math.max(0, this.#indexAt(top) - 1),
 			visibleEnd + 2,
 		);
+		const widest = String(
+			Math.max(
+				...nearby.map(({ surface }) =>
+					Number(
+						surface.style.getPropertyValue("--page-ratio") ||
+							this.#defaultRatio,
+					),
+				),
+			),
+		);
+		if (this.#stack.style.getPropertyValue("--widest-ratio") !== widest)
+			this.#stack.style.setProperty("--widest-ratio", widest);
 		this.#sizeNearby(nearby);
-		this.#pageBounds = {
-			top: activeSlot.surface.offsetTop,
-			height: Math.max(1, activeSlot.surface.clientHeight),
-		};
 		this.#wanted = [
 			activeSlot,
 			...nearby.filter((slot) => slot !== activeSlot),
@@ -712,6 +719,17 @@ export class Reader {
 			adjacent,
 		);
 		if (!target) return null;
+		const pendingRatio = this.#pageSizes.get(slot);
+		if (pendingRatio) {
+			if (slot.base || (slot.preview?.isConnected && !slot.preview.hidden))
+				return null;
+			const ratio = Number(pendingRatio);
+			const width = Math.min(target.width, target.height * ratio);
+			return pageBacking(
+				{ width, height: width / ratio },
+				target.detail ? 1 : target.density,
+			);
+		}
 		const base = slot.base?.raster;
 		if (
 			adjacent &&

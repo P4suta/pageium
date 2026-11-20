@@ -5,7 +5,126 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
-import { fixturePdf, ruledScan, withLibrary } from "./fixtures";
+import { firstBookId, fixturePdf, ruledScan, withLibrary } from "./fixtures";
+
+test("paints the whole landscape original during continuous scrolling without a preview", async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 800, height: 600 });
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await page.route("**/preview/*", (route) => route.fulfill({ status: 503 }));
+	await withLibrary(
+		["Mixed paper"],
+		async (url) => {
+			await page.goto(url);
+			await page.locator(".book").click();
+			await expect(page.locator(".pdf-page canvas").first()).toBeVisible();
+			const target = page.getByRole("img", { name: "Page 8", exact: true });
+			const sample = await target.evaluate(async (paper: HTMLElement) => {
+				const pane = paper.closest("main");
+				if (!pane) throw new Error("Missing reading area");
+				pane.scrollTop = paper.offsetTop;
+				for (let frame = 0; frame < 90; frame++) {
+					pane.scrollBy(0, 1);
+					await new Promise(requestAnimationFrame);
+					const canvas = paper.querySelector("canvas");
+					if (!canvas) continue;
+					return {
+						placeholder: paper.clientHeight > paper.clientWidth,
+						ratio: canvas.width / canvas.height,
+						ink: canvas
+							.getContext("2d")
+							?.getImageData(canvas.width / 8, canvas.height * 0.85, 1, 1)
+							.data[0],
+					};
+				}
+				throw new Error("The original did not appear while scrolling");
+			});
+			expect(sample.placeholder).toBe(true);
+			expect(sample.ratio).toBeCloseTo(780 / 600, 2);
+			expect(sample.ink).toBeLessThan(95);
+			await expect
+				.poll(() => target.evaluate((el) => el.clientWidth / el.clientHeight))
+				.toBeCloseTo(780 / 600, 2);
+		},
+		fixturePdf({ pages: 12, pagePadding: 0, landscape: [8] }),
+	);
+});
+
+test("pans to the far edge of a magnified landscape neighbor while reading a portrait page", async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 1080, height: 600 });
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await withLibrary(
+		["Mixed paper"],
+		async (url) => {
+			await page.goto(url);
+			await page.locator(".book").click();
+			const landscape = page.getByRole("img", { name: "Page 2", exact: true });
+			await expect
+				.poll(() =>
+					landscape.evaluate((el) => el.clientWidth > el.clientHeight),
+				)
+				.toBe(true);
+			for (let step = 0; step < 6; step++) await page.keyboard.press("+");
+			const first = page.getByRole("img", { name: "Page 1", exact: true });
+			await first.evaluate((paper: HTMLElement) => {
+				const pane = paper.closest("main");
+				if (pane)
+					pane.scrollTo(
+						0,
+						paper.offsetTop + paper.clientHeight - pane.clientHeight / 2,
+					);
+			});
+			await expect(page.locator(".page-position")).toHaveText("Page 1 of 4");
+			await expect(landscape).toBeInViewport();
+			await expect
+				.poll(() =>
+					landscape.evaluate((el) => {
+						const pane = el.closest("main");
+						if (!pane) throw new Error("Missing reading area");
+						pane.scrollLeft = pane.scrollWidth;
+						return (
+							el.getBoundingClientRect().right -
+							pane.getBoundingClientRect().right
+						);
+					}),
+				)
+				.toBeLessThanOrEqual(1);
+		},
+		fixturePdf({ pages: 4, pagePadding: 0, landscape: [2] }),
+	);
+});
+
+test("keeps the newly reached page when the scroll pane resizes before the next frame", async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 900, height: 640 });
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await withLibrary(["Paper"], async (url) => {
+		await page.goto(url);
+		await page.locator(".book").click();
+		await expect(page.locator(".pdf-page canvas").first()).toBeVisible();
+		const target = page.getByRole("img", { name: "Page 4", exact: true });
+		await target.evaluate((el: HTMLElement) => {
+			const pane = el.closest("main");
+			if (!pane) throw new Error("Missing reading area");
+			pane.scrollTop = el.offsetTop + el.clientHeight / 3;
+			pane.style.blockSize = "400px";
+		});
+		await expect(page.locator(".page-position")).toHaveText("Page 4 of 8");
+		await expect
+			.poll(() =>
+				target.evaluate(
+					(el: HTMLElement) =>
+						((el.closest("main")?.scrollTop ?? 0) - el.offsetTop) /
+						el.clientHeight,
+				),
+			)
+			.toBeCloseTo(1 / 3, 2);
+	});
+});
 
 for (const zoom of [1, 2]) {
 	test(`holds the reading position at ${zoom}× through a delayed landscape preview and a scroll reversal`, async ({
@@ -111,17 +230,15 @@ for (const fitWidth of [false, true]) {
 		await withLibrary(
 			["Book"],
 			async (url) => {
-				const { books } = await (
-					await page.request.get(`${url}/api/library`)
-				).json();
+				const id = await firstBookId(page.request, url);
 				const saved = await page.request.put(
-					`${url}/api/books/${books[0].id}/progress`,
+					`${url}/api/books/${id}/progress`,
 					{
 						data: { page: 800, total: 816 },
 					},
 				);
 				expect(saved.ok()).toBe(true);
-				await page.goto(`${url}/#book=${books[0].id}`);
+				await page.goto(`${url}/#book=${id}`);
 				const paper = page.getByRole("img", { name: "Page 800", exact: true });
 				await expect(paper.locator("canvas").first()).toBeVisible();
 				if (fitWidth) {
@@ -400,6 +517,10 @@ test("keeps the full paper painted while zoom reverses and pans without a previe
 			const gaps = await paper.evaluate(async (surface) => {
 				const pane = surface.closest(".reader-scroll");
 				if (!(pane instanceof HTMLElement)) throw new Error("Missing reader");
+				const sample = document.createElement("canvas");
+				sample.width = sample.height = 1;
+				const composite = sample.getContext("2d", { willReadFrequently: true });
+				if (!composite) throw new Error("Missing pixel sampler");
 				let missing = 0;
 				for (let frame = 0; frame < 24; frame++) {
 					if (frame === 0 || frame === 8) {
@@ -419,23 +540,17 @@ test("keeps the full paper painted while zoom reverses and pans without a previe
 						(Math.min(innerHeight, page.bottom) - Math.max(0, page.top)) / 2;
 					for (const fraction of [0.15, 0.5, 0.85]) {
 						const x = Math.max(0, page.left) + width * fraction;
-						const painted = [...surface.querySelectorAll("canvas")].some(
-							(canvas) => {
-								const r = canvas.getBoundingClientRect();
-								if (x < r.left || x >= r.right || y < r.top || y >= r.bottom)
-									return false;
-								const pixel = canvas
-									.getContext("2d")
-									?.getImageData(
-										((x - r.left) * canvas.width) / r.width,
-										((y - r.top) * canvas.height) / r.height,
-										1,
-										1,
-									).data;
-								return (pixel?.[0] ?? 255) < 95 && pixel?.[3] === 255;
-							},
-						);
-						if (!painted) missing++;
+						composite.clearRect(0, 0, 1, 1);
+						for (const canvas of surface.querySelectorAll("canvas")) {
+							const r = canvas.getBoundingClientRect();
+							if (x < r.left || x >= r.right || y < r.top || y >= r.bottom)
+								continue;
+							const sx = Math.floor(((x - r.left) * canvas.width) / r.width);
+							const sy = Math.floor(((y - r.top) * canvas.height) / r.height);
+							composite.drawImage(canvas, sx, sy, 1, 1, 0, 0, 1, 1);
+						}
+						const pixel = composite.getImageData(0, 0, 1, 1).data;
+						if ((pixel[0] ?? 255) >= 95 || pixel[3] !== 255) missing++;
 					}
 				}
 				return missing;
@@ -466,13 +581,17 @@ test("keeps native macOS magnification aligned above and below the pinch peak", 
 				data: { page: 48, total: 50 },
 			});
 			expect(saved.ok()).toBe(true);
-			await promisify(execFile)("xcrun", [
-				"swift",
-				fileURLToPath(
-					new URL("../../verification/macos-pinch.swift", import.meta.url),
-				),
-				`${url}/#book=${id}`,
-			]);
+			await promisify(execFile)(
+				"xcrun",
+				[
+					"swift",
+					fileURLToPath(
+						new URL("../../verification/macos-pinch.swift", import.meta.url),
+					),
+					`${url}/#book=${id}`,
+				],
+				{ timeout: 65_000, killSignal: "SIGKILL" },
+			);
 		},
 		fixturePdf({ pages: 50, pagePadding: 0 }),
 	);
@@ -541,12 +660,10 @@ test("prepares a newly scanned cover before the first shelf visit", async ({
 			readOnly: true,
 		});
 		try {
-			const row = db
-				.prepare(
-					"SELECT count(*) AS count FROM previews WHERE page=1 AND length(jpeg)>0",
-				)
-				.get();
-			expect(row?.count).toBe(1);
+			const covers = db.prepare(
+				"SELECT count(*) AS count FROM previews WHERE page=1 AND length(jpeg)>0",
+			);
+			await expect.poll(() => covers.get()?.count, { timeout: 20_000 }).toBe(1);
 		} finally {
 			db.close();
 		}
@@ -870,10 +987,7 @@ test("loads covers without opening a PDF and shows the saved page before PDF.js 
 	await withLibrary(
 		["Scan"],
 		async (url) => {
-			const library = await (
-				await page.request.get(`${url}/api/library`)
-			).json();
-			const book = library.books[0].id;
+			const book = await firstBookId(page.request, url);
 			const path = `${url}/api/books/${book}`;
 			await page.request.put(`${path}/progress`, {
 				data: { page: 2, total: 2 },

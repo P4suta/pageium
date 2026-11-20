@@ -43,7 +43,7 @@ export class Shelf {
 	#active = false;
 	#failed = false;
 	#returnBook: string | undefined;
-	#recent: { id: string; position: Position } | undefined;
+	#recent: Book | undefined;
 	#observer = new IntersectionObserver(
 		(entries) => {
 			if (
@@ -153,10 +153,12 @@ export class Shelf {
 		this.#grid.disconnect();
 	}
 
-	remember(id: string, position: Position, saved: Promise<void>): void {
-		const recent = { id, position };
+	remember(book: Book, position: Position, saved: Promise<void>): void {
+		const recent = { ...book, progress: position };
 		this.#recent = recent;
-		this.#grid.setRecent(id, position);
+		this.#grid.setRecent(book.id, position);
+		if (!this.#location.folder && !this.#location.query.trim())
+			this.#showResume(recent.folder_id ? recent : null);
 		void saved.then(() => {
 			if (this.#recent === recent) this.#recent = undefined;
 		});
@@ -234,6 +236,7 @@ export class Shelf {
 		this.#request = request;
 		this.#grid.view.setAttribute("aria-busy", "true");
 		const pin = this.#browse?.pin;
+		const recent = this.#recent;
 		let result: Library;
 		try {
 			result = await getLibrary(page, this.#location, request.signal, pin);
@@ -263,7 +266,7 @@ export class Shelf {
 			return this.#load(1);
 		} else {
 			if (page > 1) this.#failed = false;
-			this.#accept(result, pin, manual);
+			this.#accept(result, pin, manual, recent);
 		}
 
 		this.#observeMore();
@@ -275,6 +278,7 @@ export class Shelf {
 		library: Extract<Library, { status: "ready" }>,
 		pin: string | undefined,
 		manual: boolean,
+		recent: Book | undefined,
 	): void {
 		const fresh = library.revision !== this.#browse?.revision;
 		const append = fresh || library.page > (this.#browse?.page ?? 0);
@@ -302,7 +306,9 @@ export class Shelf {
 		this.#tools.hidden = !library.total && !folders && !query;
 		if (library.page === 1) {
 			if (fresh) this.#showPath(library.directory.path);
-			this.#showResume(library.directory.resume);
+			if (recent && !this.#location.folder && !query)
+				this.#showResume(recent.folder_id ? recent : null);
+			else this.#showResume(library.directory.resume);
 		}
 		if (fresh || append) {
 			this.#status.replaceChildren();
@@ -327,16 +333,15 @@ export class Shelf {
 				);
 			}
 		}
-		const id = this.#recent?.id ?? library.recent;
+		const id = recent?.id ?? library.recent;
 		const position =
-			this.#recent?.position ??
+			recent?.progress ??
 			library.books.find((book) => book.id === id)?.progress;
 		this.#grid.setRecent(id, position);
 		const first = append
 			? this.#grid.append([...library.directory.folders, ...library.books])
 			: undefined;
-		if (this.#recent)
-			this.#grid.setRecent(this.#recent.id, this.#recent.position);
+		if (recent) this.#grid.setRecent(recent.id, recent.progress);
 		const target = this.#returnBook ?? (manual ? first?.id : undefined);
 		this.#returnBook = undefined;
 		if (target) this.#focusBook(target);

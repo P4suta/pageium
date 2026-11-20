@@ -1,12 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
-import { fixturePdf, withLibrary } from "./fixtures";
+import { firstBookId, fixturePdf, withLibrary } from "./fixtures";
 
 const paper = (page: Page, number: number) =>
 	page.getByRole("img", { name: `Page ${number}`, exact: true });
 
 async function resume(page: Page, url: string, number: number, total: number) {
-	const { books } = await (await page.request.get(`${url}/api/library`)).json();
-	const id = books[0].id;
+	const id = await firstBookId(page.request, url);
 	const saved = await page.request.put(`${url}/api/books/${id}/progress`, {
 		data: { page: number, total },
 	});

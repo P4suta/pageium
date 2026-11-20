@@ -3,6 +3,79 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { fixturePdf, withLibrary } from "./fixtures";
 
+function gate() {
+	let open!: () => void;
+	const wait = new Promise<void>((resolve) => {
+		open = resolve;
+	});
+	return { open, wait };
+}
+
+test("shows the latest page in the root resume link while saving a nested book", async ({
+	page,
+}) => {
+	await withLibrary([], async (url, root) => {
+		await mkdir(join(root, "Notes"));
+		await writeFile(
+			join(root, "Notes", "Journal.pdf"),
+			fixturePdf({ pages: 4, pagePadding: 0 }),
+		);
+		await page.goto(url);
+		await page.getByRole("button", { name: "Rescan library" }).click();
+		await page.getByRole("link", { name: "Notes", exact: true }).click();
+		const id = await page
+			.getByRole("link", { name: "Journal" })
+			.getAttribute("id");
+		const saved = await page.request.put(`${url}/api/books/${id}/progress`, {
+			data: { page: 1, total: 4 },
+		});
+		expect(saved.ok()).toBe(true);
+		await page.getByRole("link", { name: "Library", exact: true }).click();
+		const resume = page.getByRole("link", {
+			name: /Continue reading.*Journal/,
+		});
+		await expect(resume).toContainText("Page 1 of 4");
+		const write = gate();
+		const read = gate();
+		const reply = gate();
+		await page.route("**/progress", async (route) => {
+			await write.wait;
+			await route.continue();
+		});
+		try {
+			await resume.click();
+			await expect(page.locator(".page-position")).toHaveText("Page 1 of 4");
+			await page
+				.getByRole("img", { name: "Page 2", exact: true })
+				.evaluate((el) => el.scrollIntoView({ block: "start" }));
+			await expect(page.locator(".page-position")).toHaveText("Page 2 of 4");
+			await page.route("**/api/library?*", async (route) => {
+				const response = await route.fetch();
+				read.open();
+				await reply.wait;
+				await route.fulfill({ response });
+			});
+			await page.goBack();
+			await read.wait;
+			await expect(resume).toContainText("Page 2 of 4");
+			const saved = page.waitForResponse(
+				(res) => res.url().endsWith("/progress") && res.ok(),
+			);
+			write.open();
+			await saved;
+			reply.open();
+			await expect(page.locator(".shelf-grid")).not.toHaveAttribute(
+				"aria-busy",
+				"true",
+			);
+			await expect(resume).toContainText("Page 2 of 4");
+		} finally {
+			write.open();
+			reply.open();
+		}
+	});
+});
+
 test("browses nested folders and returns to the search that opened a book", async ({
 	page,
 }) => {

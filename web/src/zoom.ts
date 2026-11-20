@@ -116,7 +116,8 @@ export class PaperZoom {
 			paper,
 			rect: paper.getBoundingClientRect(),
 		}));
-		const fittedWidth = (bounds[0]?.rect.width ?? 0) / this.scale;
+		const fittedWidth =
+			Math.max(...bounds.map(({ rect }) => rect.width)) / this.scale;
 		bounds.sort((a, b) => a.rect.top - b.rect.top);
 		let scaledHeight = 0;
 		let focusX = 0;

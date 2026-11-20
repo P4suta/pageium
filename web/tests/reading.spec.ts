@@ -918,16 +918,14 @@ test("shows an empty shelf and returns from an unreadable file", async ({
 test("leaving a reader while the PDF module loads cancels its document request", async ({
 	page,
 }) => {
-	await withLibrary(["The Shape of Quiet"], async (url) => {
+	await withLibrary(["The Shape of Quiet", "Another book"], async (url) => {
 		let release = (): void => {};
 		const waitForRelease = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		let documentLoads = 0;
+		const documentLoads: string[] = [];
 		page.on("request", (request) => {
-			if (request.url().endsWith("/pdf") && !request.headers().range) {
-				documentLoads += 1;
-			}
+			if (request.url().endsWith("/pdf")) documentLoads.push(request.url());
 		});
 		await page.route("**/assets/pdf-*.js", async (route) => {
 			await waitForRelease;
@@ -936,16 +934,26 @@ test("leaving a reader while the PDF module loads cancels its document request",
 		try {
 			await page.goto(url);
 			const book = page.getByRole("link", { name: "The Shape of Quiet" });
+			const cancelled = `${url}/api/books/${await book.getAttribute("id")}/pdf`;
 			await book.click();
 			await expect(
 				page.getByRole("img", { name: "Page 1", exact: true }),
 			).toBeVisible();
 			await returnToLibrary(page);
 			await expect(book).toBeVisible();
-			expect(documentLoads).toBe(0);
+			expect(documentLoads).not.toContain(cancelled);
 			release();
-			await expect(book.locator("img")).toBeVisible();
-			expect(documentLoads).toBe(0);
+			const other = page.getByRole("link", { name: "Another book" });
+			const opened = `${url}/api/books/${await other.getAttribute("id")}/pdf`;
+			await other.click();
+			await expect(
+				page
+					.getByRole("img", { name: "Page 1", exact: true })
+					.locator("canvas")
+					.first(),
+			).toBeVisible();
+			expect(documentLoads).toContain(opened);
+			expect(documentLoads).not.toContain(cancelled);
 		} finally {
 			release();
 		}
