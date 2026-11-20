@@ -21,22 +21,73 @@ pub(crate) enum Catalog {
     Scanning,
     Ready {
         books: BTreeMap<String, Book>,
+        folders: BTreeMap<String, Folder>,
         revision: String,
     },
     Unavailable,
 }
 
 impl Catalog {
-    pub(crate) fn ready(books: BTreeMap<String, Book>) -> Self {
-        let mut digest = Sha256::new();
-        for id in books.keys() {
-            digest.update(id.as_bytes());
-        }
-        Self::Ready {
-            books,
-            revision: format!("{:x}", digest.finalize()),
+    pub(crate) fn newest_additions(&self, previous: &Self, limit: usize) -> Vec<(String, Book)> {
+        let Self::Ready { books, .. } = self else {
+            return Vec::new();
+        };
+        let mut added: Vec<_> = books.iter().filter(|(id, _)| {
+            !matches!(previous, Self::Ready { books: known, .. } if known.contains_key(*id))
+        }).collect();
+        added.sort_by_key(|(_, book)| std::cmp::Reverse(book.version.modified));
+        added
+            .into_iter()
+            .take(limit)
+            .map(|(id, book)| (id.clone(), book.clone()))
+            .collect()
+    }
+}
+
+pub(crate) struct Folder {
+    path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) children: Vec<String>,
+}
+
+fn scan_entries(
+    folder: &Path,
+    id: &str,
+    entries: ReadDir,
+    books: &mut BTreeMap<String, Book>,
+) -> io::Result<Vec<PathBuf>> {
+    let mut children = Vec::new();
+    let display_path = folder.strip_prefix(".").unwrap_or(folder).to_string_lossy();
+    for entry in entries {
+        let entry = entry?;
+        let path = folder.join(entry.file_name());
+        let Some(metadata) = present(entry.metadata())? else {
+            continue;
+        };
+        if metadata.is_dir() {
+            children.push(path);
+        } else if metadata.is_file()
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+            && let Some(name) = path.file_stem()
+        {
+            let version = FileVersion::read(&metadata)?;
+            books.insert(
+                version.id(&path),
+                Book {
+                    version,
+                    title: name.to_string_lossy().into_owned(),
+                    folder: display_path.to_string(),
+                    folder_id: id.to_owned(),
+                    path,
+                },
+            );
         }
     }
+    children.sort_unstable();
+    Ok(children)
 }
 
 #[derive(Clone)]
@@ -45,6 +96,13 @@ pub(crate) struct Book {
     version: FileVersion,
     pub(crate) title: String,
     pub(crate) folder: String,
+    pub(crate) folder_id: String,
+}
+
+impl Book {
+    pub(crate) fn under(&self, folder: &Folder) -> bool {
+        self.path.starts_with(&folder.path)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,17 +140,60 @@ impl Source {
         Dir::open_ambient_dir(&self.books, ambient_authority())
     }
 
-    pub(crate) fn index(&self) -> io::Result<BTreeMap<String, Book>> {
+    pub(crate) fn index(&self) -> io::Result<Catalog> {
         let root = self.root()?;
         let mut books = BTreeMap::new();
-        let mut pending = Vec::new();
-        scan_folder(Path::new("."), root.entries()?, &mut books, &mut pending)?;
-        while let Some(folder) = pending.pop() {
-            if let Some(entries) = present(root.read_dir(&folder))? {
-                scan_folder(&folder, entries, &mut books, &mut pending)?;
-            }
+        let mut folders = BTreeMap::<String, Folder>::new();
+        let mut pending = vec![(PathBuf::from("."), None::<String>)];
+        while let Some((path, parent)) = pending.pop() {
+            let (id, entries) = if let Some(parent_id) = &parent {
+                let Some(entries) = present(root.read_dir(&path))? else {
+                    continue;
+                };
+                let id = format!("{:x}", Sha256::digest(path.as_os_str().as_encoded_bytes()));
+                folders
+                    .get_mut(parent_id)
+                    .ok_or_else(|| io::Error::other("Missing parent in folder index"))?
+                    .children
+                    .push(id.clone());
+                (id, entries)
+            } else {
+                (String::new(), root.entries()?)
+            };
+            let children = scan_entries(&path, &id, entries, &mut books)?;
+            pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .map(|child| (child, Some(id.clone()))),
+            );
+            folders.insert(
+                id,
+                Folder {
+                    name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    path,
+                    parent,
+                    children: Vec::new(),
+                },
+            );
         }
-        Ok(books)
+        let mut digest = Sha256::new();
+        for id in folders.keys() {
+            digest.update(id.as_bytes());
+        }
+        digest.update([0]);
+        for id in books.keys() {
+            digest.update(id.as_bytes());
+        }
+        Ok(Catalog::Ready {
+            books,
+            folders,
+            revision: format!("{:x}", digest.finalize()),
+        })
     }
 
     pub(crate) fn open(&self, book: &Book) -> io::Result<(File, u64)> {
@@ -107,45 +208,6 @@ impl Source {
         }
         Ok((file.into_std(), book.version.bytes))
     }
-}
-
-fn scan_folder(
-    folder: &Path,
-    entries: ReadDir,
-    books: &mut BTreeMap<String, Book>,
-    pending: &mut Vec<PathBuf>,
-) -> io::Result<()> {
-    for entry in entries {
-        let entry = entry?;
-        let path = folder.join(entry.file_name());
-        let Some(metadata) = present(entry.metadata())? else {
-            continue;
-        };
-        if metadata.is_dir() {
-            pending.push(path);
-        } else if metadata.is_file()
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
-            && let Some(name) = path.file_stem()
-        {
-            let version = FileVersion::read(&metadata)?;
-            books.insert(
-                version.id(&path),
-                Book {
-                    version,
-                    title: name.to_string_lossy().into_owned(),
-                    folder: folder
-                        .strip_prefix(".")
-                        .unwrap_or(folder)
-                        .to_string_lossy()
-                        .into_owned(),
-                    path,
-                },
-            );
-        }
-    }
-    Ok(())
 }
 
 fn present<T>(result: io::Result<T>) -> io::Result<Option<T>> {
@@ -202,6 +264,32 @@ mod tests {
     use std::{io, path::Path};
 
     use super::{contains_read_only_smb, present};
+
+    #[test]
+    fn prepares_recent_additions_and_skips_known_versions() -> io::Result<()> {
+        let folder = tempfile::tempdir()?;
+        let source = super::Source {
+            books: folder.path().into(),
+            smb_mount: None,
+        };
+        std::fs::write(folder.path().join("Known.pdf"), b"existing")?;
+        let before = source.index()?;
+        for day in 1..=3 {
+            let file = std::fs::File::create(folder.path().join(format!("Scan{day}.pdf")))?;
+            file.set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(day * 86_400),
+            )?;
+        }
+        let after = source.index()?;
+        let names: Vec<_> = after
+            .newest_additions(&before, 2)
+            .into_iter()
+            .map(|(_, book)| book.title)
+            .collect();
+        assert_eq!(names, ["Scan3", "Scan2"]);
+        assert!(after.newest_additions(&after, 8).is_empty());
+        Ok(())
+    }
 
     #[test]
     fn a_scan_skips_missing_entries_and_propagates_other_errors() -> io::Result<()> {

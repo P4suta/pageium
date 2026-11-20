@@ -1,5 +1,6 @@
 import { getBook, isBookId, type Position } from "./api";
-import { element, icon, message } from "./dom";
+import { element, message } from "./dom";
+import { backToShelf, type ShelfLocation } from "./location";
 import { Reader } from "./reader";
 import { Shelf } from "./shelf";
 import "./style.css";
@@ -34,41 +35,58 @@ class App {
 			const closing = previous.close();
 			this.#saving.set(id, closing);
 			if (closing.position)
-				this.#shelf.remember(id, closing.position, closing.saved);
+				this.#shelf.remember(previous.book, closing.position, closing.saved);
 			void closing.saved.then(() => {
 				if (this.#saving.get(id) === closing) this.#saving.delete(id);
 			});
 		}
 		if (request.signal.aborted) return;
-		const key = window.location.hash.slice("#book=".length);
-		if (window.location.hash.startsWith("#book=") && isBookId(key)) {
+		const params = new URLSearchParams(window.location.hash.slice(1));
+		const location = {
+			folder: params.get("folder") ?? "",
+			query: params.get("q") ?? "",
+		};
+		const key = params.get("book");
+		if (isBookId(key)) {
 			if (this.#shelf.view.isConnected) this.#returnScroll = window.scrollY;
 			this.#shelf.pause();
 			this.#lastBook = key;
-			this.#showReaderMessage("Opening PDF", "Loading the document.", "scan");
-			await this.#loadBook(key, request.signal);
+			this.#showReaderMessage(
+				"Opening PDF",
+				"Loading the document.",
+				"scan",
+				location,
+			);
+			await this.#loadBook(
+				key,
+				request.signal,
+				params.has("folder") ? location : undefined,
+			);
 		} else {
 			const book = this.#lastBook ?? undefined;
 			this.#lastBook = null;
-			document.title = "Library · Pageium";
 			this.root.replaceChildren(this.#shelf.view);
-			await this.#shelf.resume(book, this.#returnScroll);
+			await this.#shelf.resume(location, book, this.#returnScroll);
 		}
 	}
 
-	async #loadBook(id: string, signal: AbortSignal): Promise<void> {
+	async #loadBook(
+		id: string,
+		signal: AbortSignal,
+		location?: ShelfLocation,
+	): Promise<void> {
 		try {
 			const opening = this.#saving.get(id);
 			const lookup = await getBook(id, signal);
 			if (signal.aborted) return;
 			if (lookup.status === "scanning") {
 				this.#poll = window.setTimeout(() => {
-					void this.#loadBook(id, signal);
+					void this.#loadBook(id, signal, location);
 				}, 550);
 				return;
 			}
 			if (lookup.status === "unavailable") {
-				this.#showMissingBook();
+				this.#showMissingBook(location);
 				return;
 			}
 			const pending = this.#saving.get(id) ?? opening;
@@ -76,22 +94,27 @@ class App {
 				...lookup.book,
 				progress: pending?.position ?? lookup.book.progress,
 			};
-			const reader = new Reader(book, pending?.saved);
+			const reader = new Reader(
+				book,
+				location ?? { folder: book.folder_id, query: "" },
+				pending?.saved,
+			);
 			this.#reader = reader;
 			document.title = `${book.title} · Pageium`;
 			this.root.replaceChildren(reader.view);
 			reader.heading.focus({ preventScroll: true });
 			await reader.open();
 		} catch {
-			if (!signal.aborted) this.#showMissingBook();
+			if (!signal.aborted) this.#showMissingBook(location);
 		}
 	}
 
-	#showMissingBook(): void {
+	#showMissingBook(location?: ShelfLocation): void {
 		this.#showReaderMessage(
 			"PDF unavailable",
 			"The PDF could not be opened.",
 			"alert",
+			location,
 		);
 	}
 
@@ -99,13 +122,11 @@ class App {
 		title: string,
 		detail: string,
 		symbol: "scan" | "alert",
+		location: ShelfLocation = { folder: "", query: "" },
 	): void {
 		const frame = element("div", "reader");
 		const header = element("header", "reader-header");
-		const back = element("a", "library-link");
-		back.href = "#";
-		back.append(icon("arrow-left"), element("span", undefined, "Library"));
-		header.append(back);
+		header.append(backToShelf(location));
 		const main = element("main", "reader-scroll");
 		main.append(message(title, detail, symbol));
 		frame.append(header, main);

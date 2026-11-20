@@ -1,4 +1,10 @@
-use std::{collections::HashMap, io, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    num::NonZeroUsize,
+    path::Path,
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
@@ -16,7 +22,7 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use crate::{
     ScanOutcome, Service,
-    books::{Book, Catalog},
+    books::{Book, Catalog, Folder},
     progress::Position,
     range::{RequestRange, Span},
 };
@@ -37,9 +43,10 @@ pub(crate) fn router(service: Arc<Service>, web: &Path) -> Router {
         .route("/api/library/scan", post(scan_library))
         .route("/api/books/{id}", get(book))
         .route("/api/books/{id}/pdf", get(pdf).head(pdf))
+        .route("/api/books/{id}/preview/{page}", get(preview))
         .route("/api/books/{id}/progress", put(save_position))
         .layer(DefaultBodyLimit::max(1024))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
@@ -72,6 +79,8 @@ enum CatalogView<'a> {
         books: Vec<BookView<'a>>,
         recent: Option<&'a str>,
         revision: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        directory: Option<DirectoryView<'a>>,
         #[serde(flatten)]
         pagination: Option<Pagination>,
     },
@@ -83,6 +92,7 @@ struct BookView<'a> {
     id: &'a str,
     title: &'a str,
     folder: &'a str,
+    folder_id: &'a str,
     progress: Option<Position>,
     duplicate_title: bool,
 }
@@ -93,6 +103,7 @@ impl<'a> BookView<'a> {
             id,
             title: &book.title,
             folder: &book.folder,
+            folder_id: &book.folder_id,
             progress,
             duplicate_title,
         }
@@ -104,9 +115,39 @@ struct LibraryQuery {
     page: Option<NonZeroUsize>,
     q: Option<String>,
     pin: Option<String>,
+    folder: Option<String>,
 }
 
-const BOOKS_PER_PAGE: usize = 48;
+#[derive(Serialize)]
+struct FolderLink<'a> {
+    id: &'a str,
+    name: &'a str,
+}
+
+#[derive(Serialize)]
+struct DirectoryView<'a> {
+    path: Vec<FolderLink<'a>>,
+    folders: Vec<FolderLink<'a>>,
+    total_folders: usize,
+    resume: Option<Box<BookView<'a>>>,
+}
+
+fn folder_path<'a>(folders: &'a BTreeMap<String, Folder>, mut id: &'a str) -> Vec<FolderLink<'a>> {
+    let mut path = Vec::new();
+    while let Some(folder) = folders.get(id)
+        && let Some(parent) = &folder.parent
+    {
+        path.push(FolderLink {
+            id,
+            name: &folder.name,
+        });
+        id = parent;
+    }
+    path.reverse();
+    path
+}
+
+const ENTRIES_PER_PAGE: usize = 48;
 
 #[derive(Serialize)]
 struct Pagination {
@@ -116,17 +157,17 @@ struct Pagination {
 }
 
 impl Pagination {
-    fn new(requested: NonZeroUsize, total: usize) -> Self {
-        let pages = total.div_ceil(BOOKS_PER_PAGE).max(1);
+    fn new(requested: NonZeroUsize, books: usize, folders: usize) -> Self {
+        let pages = (books + folders).div_ceil(ENTRIES_PER_PAGE).max(1);
         Self {
             page: requested.get().min(pages),
             pages,
-            total,
+            total: books,
         }
     }
 
     fn offset(&self) -> usize {
-        (self.page - 1) * BOOKS_PER_PAGE
+        (self.page - 1) * ENTRIES_PER_PAGE
     }
 }
 
@@ -139,8 +180,14 @@ async fn library(
         Catalog::Scanning => CatalogView::Scanning,
         Catalog::Ready {
             books: entries,
+            folders,
             revision,
         } => {
+            let location = filter
+                .folder
+                .as_deref()
+                .map(|id| folders.get_key_value(id).ok_or(StatusCode::NOT_FOUND))
+                .transpose()?;
             let saved = service.progress.all().await.map_err(progress_error)?;
             let recent = entries
                 .keys()
@@ -160,6 +207,11 @@ async fn library(
                 .to_lowercase();
             let mut ordered: Vec<_> = entries
                 .iter()
+                .filter(|(_, book)| match location {
+                    Some((id, _)) if query.is_empty() => &book.folder_id == id,
+                    Some((_, folder)) => book.under(folder),
+                    None => true,
+                })
                 .filter_map(|(id, book)| {
                     let title = book.title.to_lowercase();
                     (query.is_empty()
@@ -171,20 +223,52 @@ async fn library(
             ordered.sort_by(|(id, book, key), (other_id, other, other_key)| {
                 (key, &book.folder, id).cmp(&(other_key, &other.folder, other_id))
             });
+            let children = location
+                .filter(|_| query.is_empty())
+                .map_or(&[][..], |(_, folder)| folder.children.as_slice());
             let pagination = filter
                 .page
-                .map(|requested| Pagination::new(requested, ordered.len()));
+                .map(|requested| Pagination::new(requested, ordered.len(), children.len()));
             let (offset, limit) = pagination
                 .as_ref()
-                .map_or((0, ordered.len()), |page| (page.offset(), BOOKS_PER_PAGE));
+                .map_or((0, ordered.len() + children.len()), |page| {
+                    (page.offset(), ENTRIES_PER_PAGE)
+                });
+            let visible_folders = children.iter().skip(offset).take(limit);
+            let book_limit = limit - visible_folders.len();
             CatalogView::Ready {
                 recent,
                 revision,
+                directory: location.map(|(id, _)| DirectoryView {
+                    path: folder_path(folders, id),
+                    folders: visible_folders
+                        .map(|id| FolderLink {
+                            id,
+                            name: &folders[id].name,
+                        })
+                        .collect(),
+                    total_folders: children.len(),
+                    resume: recent.and_then(|recent_id| {
+                        let book = &entries[recent_id];
+                        (id.is_empty()
+                            && query.is_empty()
+                            && !book.folder_id.is_empty()
+                            && offset == 0)
+                            .then(|| {
+                                Box::new(BookView::of(
+                                    recent_id,
+                                    book,
+                                    Some(saved[recent_id].position),
+                                    false,
+                                ))
+                            })
+                    }),
+                }),
                 pagination,
                 books: ordered
                     .into_iter()
-                    .skip(offset)
-                    .take(limit)
+                    .skip(offset.saturating_sub(children.len()))
+                    .take(book_limit)
                     .map(|(id, book, _)| {
                         BookView::of(
                             id,
@@ -293,18 +377,13 @@ fn select_range(headers: &HeaderMap, size: u64) -> Selection {
         .map_or(Selection::Unsatisfiable, Selection::Partial)
 }
 
-async fn pdf(
-    State(service): State<Arc<Service>>,
-    RoutePath(id): RoutePath<String>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, StatusCode> {
+async fn open_pdf(service: &Service, id: &str) -> Result<(std::fs::File, u64), StatusCode> {
     let book = match service.catalog.read().await.as_ref() {
-        Catalog::Ready { books, .. } => books.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?,
+        Catalog::Ready { books, .. } => books.get(id).cloned().ok_or(StatusCode::NOT_FOUND)?,
         Catalog::Scanning | Catalog::Unavailable => return Err(StatusCode::SERVICE_UNAVAILABLE),
     };
     let source = Arc::clone(&service.source);
-    let (file, size) = tokio::task::spawn_blocking(move || source.open(&book))
+    tokio::task::spawn_blocking(move || source.open(&book))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|error| {
@@ -314,7 +393,39 @@ async fn pdf(
                 tracing::warn!(kind = ?error.kind(), "PDF open unavailable");
                 StatusCode::SERVICE_UNAVAILABLE
             }
-        })?;
+        })
+}
+
+async fn preview(
+    State(service): State<Arc<Service>>,
+    RoutePath((id, page)): RoutePath<(String, i32)>,
+) -> Result<Response, StatusCode> {
+    if page < 1 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (file, _) = open_pdf(&service, &id).await?;
+    let jpeg = service.previews.page(file, id, page).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "private, max-age=604800, immutable"),
+            (
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                "same-origin",
+            ),
+        ],
+        jpeg,
+    )
+        .into_response())
+}
+
+async fn pdf(
+    State(service): State<Arc<Service>>,
+    RoutePath(id): RoutePath<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let (file, size) = open_pdf(&service, &id).await?;
     let response = Response::builder()
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_TYPE, "application/pdf")

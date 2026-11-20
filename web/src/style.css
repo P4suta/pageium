@@ -87,6 +87,10 @@ h1:focus {
 	--glyph: url("/icons/scan.svg");
 }
 
+.icon--folder {
+	--glyph: url("/icons/folder.svg");
+}
+
 .icon--alert {
 	--glyph: url("/icons/alert.svg");
 	color: var(--error);
@@ -149,6 +153,8 @@ h1:focus {
 }
 
 .library h1 {
+	max-inline-size: 100%;
+	overflow-wrap: anywhere;
 	font-size: 32px;
 	font-weight: 600;
 	line-height: 38px;
@@ -276,12 +282,97 @@ h1:focus {
 	gap: 24px;
 }
 
+.folder-path ol,
+.folders {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.folder-path ol {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 0.625rem;
+}
+
+.folder-path li,
+.folder-path a,
+.folder-link,
+.resume-link {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-inline-size: 0;
+	max-inline-size: 100%;
+	overflow-wrap: anywhere;
+	color: light-dark(black, white);
+	font-size: 1.125rem;
+	line-height: 1.5;
+}
+
+.folder-path li + li::before,
+.folder-link::after {
+	content: "";
+	flex: none;
+	inline-size: 0.45rem;
+	block-size: 0.45rem;
+	border-block-start: 2px solid currentColor;
+	border-inline-end: 2px solid currentColor;
+	transform: rotate(45deg);
+}
+
+.folder-path a,
+.folder-link,
+.resume-link {
+	min-block-size: 48px;
+	min-inline-size: 48px;
+}
+
+.folder-path a span:last-child,
+.folder-link:hover span:last-child,
+.resume-link:hover strong {
+	text-decoration: underline;
+	text-underline-offset: 0.18em;
+}
+
+.folders {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+	gap: 0.5rem 1rem;
+}
+
+.folder-link {
+	gap: 0.75rem;
+	padding: 0.5rem 0.875rem;
+	border: 1px solid currentColor;
+	border-radius: 0.75rem;
+	scroll-margin-block: 7rem 1rem;
+}
+
+.folder-link::after {
+	margin-inline-start: auto;
+}
+
+.resume-link {
+	flex-wrap: wrap;
+	margin-block-end: 1rem;
+}
+
+.resume-link[hidden] {
+	display: none;
+}
+
 .books {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 24px 16px;
 	padding: 0;
 	list-style: none;
+}
+
+.folders + .books {
+	margin-block-start: 1.5rem;
 }
 
 .book {
@@ -309,7 +400,13 @@ h1:focus {
 	color: var(--muted);
 }
 
-.cover canvas {
+.cover-status {
+	align-self: end;
+	padding: 8px;
+	font-size: 13px;
+}
+
+.cover img {
 	position: absolute;
 	inset: 0;
 	inline-size: 100%;
@@ -445,6 +542,31 @@ h1:focus {
 	cursor: pointer;
 }
 
+.reader-zoom {
+	display: flex;
+	grid-area: fit;
+	gap: 4px;
+	align-items: center;
+}
+
+.reader-zoom button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.reader-magnification {
+	inline-size: 4.7ch;
+	text-align: center;
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+
+.reader-zoom[hidden],
+.cover img[hidden],
+.pdf-page img[hidden] {
+	display: none;
+}
+
 .reader-fit[aria-pressed="true"] {
 	box-shadow: var(--sunken);
 }
@@ -501,14 +623,19 @@ h1:focus {
 	--reader-inset-start: 8px;
 	--reader-inset-end: max(12px, env(safe-area-inset-bottom));
 	--reader-gutter: clamp(12px, 4.61vw, 36px);
+	--reader-left: max(var(--reader-gutter), env(safe-area-inset-left));
+	--reader-right: max(var(--reader-gutter), env(safe-area-inset-right));
 	container-type: size;
 	overflow: auto;
 	overflow-anchor: none;
 	overscroll-behavior: contain;
 	padding-block: var(--reader-inset-start) var(--reader-inset-end);
-	padding-inline: max(var(--reader-gutter), env(safe-area-inset-left))
-		max(var(--reader-gutter), env(safe-area-inset-right));
+	padding-inline: var(--reader-left) var(--reader-right);
 	box-shadow: var(--sunken);
+}
+
+.reader-scroll:has(> .pdf-pages) {
+	padding-inline: 0;
 }
 
 .reader--reading .reader-scroll {
@@ -525,25 +652,81 @@ h1:focus {
 	margin: 12px auto;
 }
 
+.reader-password input {
+	inline-size: min(100%, 22em);
+	min-block-size: 48px;
+	padding-inline: 12px;
+	border: 1px solid currentColor;
+	border-radius: 8px;
+	background: var(--base);
+	color: var(--ink);
+	font: inherit;
+}
+
 .pdf-pages {
+	--page-ratio: 0.7071;
+	--reader-zoom: 1;
+	--reading-width: calc(100cqw - var(--reader-left) - var(--reader-right));
+	--reading-height: 100cqh;
+	--fitted-width: min(
+		var(--reading-width),
+		calc(var(--reading-height) * var(--widest-ratio, var(--page-ratio)))
+	);
+	inline-size: calc(100cqw + (var(--reader-zoom) - 1) * var(--fitted-width));
+	padding-inline: var(--reader-left) var(--reader-right);
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	position: relative;
+	overflow: clip;
 	gap: 12px;
 }
 
 .pdf-page {
+	--fitted-width: min(
+		var(--reading-width),
+		calc(var(--reading-height) * var(--page-ratio))
+	);
+	--page-zoom: 1;
 	position: relative;
+	transform-origin: top left;
 	overflow: hidden;
-	justify-self: center;
-	inline-size: min(100%, calc(100cqh * var(--page-ratio)));
+	justify-self: start;
+	margin-inline: calc((var(--reading-width) - var(--fitted-width)) / 2);
+	inline-size: calc(var(--fitted-width) * var(--page-zoom));
 	aspect-ratio: var(--page-ratio);
 	background: var(--paper);
 }
 
-.reader--fit-width .pdf-page {
-	inline-size: 100%;
+.reader--fit-width :is(.pdf-pages, .pdf-page) {
+	--fitted-width: var(--reading-width);
 }
 
+.pdf-page--near {
+	--page-zoom: var(--reader-zoom);
+}
+
+.reader-scroll--scaling .pdf-page--near {
+	will-change: transform;
+}
+
+.pdf-page[data-status]::after {
+	content: attr(data-status);
+	display: grid;
+	place-items: center;
+	position: absolute;
+	inset: 0;
+	background: var(--base);
+	color: var(--ink);
+	font-size: 14px;
+	pointer-events: none;
+}
+
+.page-preview,
+.pdf-page canvas:not(.page-detail) {
+	object-fit: contain;
+}
+
+.page-preview,
 .pdf-page canvas {
 	display: block;
 	position: absolute;
@@ -564,7 +747,7 @@ h1:focus {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-	.reader-scroll {
+	.reader--reading .reader-scroll:not(.reader-scroll--free-pan) {
 		scroll-snap-type: y proximity;
 		scroll-padding-block: var(--reader-inset-start) var(--reader-inset-end);
 	}
@@ -600,8 +783,8 @@ h1:focus {
 		animation-delay: 35ms;
 	}
 
-	.cover canvas {
-		animation: cover-in 390ms cubic-bezier(0.22, 1, 0.36, 1);
+	.cover img {
+		animation: cover-in 100ms cubic-bezier(0.22, 1, 0.36, 1);
 	}
 
 	.reader--reading .reader-header {
@@ -621,10 +804,6 @@ h1:focus {
 
 	.reader:not(.reader--reading) .reader-header {
 		animation: reader-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
-	}
-
-	.pdf-page canvas {
-		animation: page-in 160ms ease-out;
 	}
 
 	@media (hover: hover) and (pointer: fine) {
@@ -653,12 +832,6 @@ h1:focus {
 	from {
 		opacity: 0;
 		transform: translateY(-9px);
-	}
-}
-
-@keyframes page-in {
-	from {
-		opacity: 0.72;
 	}
 }
 

@@ -9,7 +9,7 @@ export function element<Tag extends keyof HTMLElementTagNameMap>(
 	return node;
 }
 
-type Icon = "book" | "arrow-left" | "scan" | "alert" | "search";
+type Icon = "book" | "folder" | "arrow-left" | "scan" | "alert" | "search";
 
 export function icon(name: Icon): HTMLSpanElement {
 	const node = element("span", `icon icon--${name}`);

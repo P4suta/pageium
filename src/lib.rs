@@ -1,4 +1,6 @@
 mod books;
+mod database;
+mod previews;
 mod progress;
 mod range;
 mod web;
@@ -13,7 +15,7 @@ use anyhow::{Context, Result, ensure};
 use axum::Router;
 use tokio::sync::{Mutex, RwLock, broadcast};
 
-use books::{Catalog, Source};
+use books::{Book, Catalog, Source};
 use progress::Store;
 
 pub struct Paths {
@@ -34,6 +36,7 @@ struct Service {
     catalog: RwLock<Arc<Catalog>>,
     scan: Mutex<Option<broadcast::Sender<ScanOutcome>>>,
     progress: Store,
+    previews: previews::Previews,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +76,7 @@ impl Pageium {
                 catalog: RwLock::new(Arc::new(Catalog::Scanning)),
                 scan: Mutex::new(None),
                 progress,
+                previews: previews::Previews::open(&state),
             }),
             web: paths.web,
         })
@@ -105,18 +109,26 @@ impl Service {
         *active = Some(finished.clone());
         let service = Arc::clone(self);
         tokio::spawn(async move {
-            let outcome = service.scan_catalog().await;
-            let mut active = service.scan.lock().await;
+            let (outcome, covers) = service.scan_catalog().await;
+            *service.scan.lock().await = None;
+            if !covers.is_empty() {
+                let warm = tokio::spawn(async move {
+                    service
+                        .previews
+                        .prepare_covers(&service.source, covers)
+                        .await;
+                });
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(4), warm).await;
+            }
             let _ = finished.send(outcome);
-            *active = None;
         });
         receiver
     }
 
-    async fn scan_catalog(&self) -> ScanOutcome {
+    async fn scan_catalog(&self) -> (ScanOutcome, Vec<(String, Book)>) {
         let source = Arc::clone(&self.source);
         let catalog = match tokio::task::spawn_blocking(move || source.index()).await {
-            Ok(Ok(books)) => Catalog::ready(books),
+            Ok(Ok(catalog)) => catalog,
             Ok(Err(error)) => {
                 tracing::warn!(kind = ?error.kind(), "Library scan unavailable");
                 Catalog::Unavailable
@@ -128,13 +140,15 @@ impl Service {
         };
         let mut current = self.catalog.write().await;
         if matches!(catalog, Catalog::Ready { .. }) {
-            *current = Arc::new(catalog);
-            ScanOutcome::Ready
+            let catalog = Arc::new(catalog);
+            let previous = std::mem::replace(&mut *current, Arc::clone(&catalog));
+            drop(current);
+            (ScanOutcome::Ready, catalog.newest_additions(&previous, 8))
         } else {
             if !matches!(current.as_ref(), Catalog::Ready { .. }) {
                 *current = Arc::new(catalog);
             }
-            ScanOutcome::Unavailable
+            (ScanOutcome::Unavailable, Vec::new())
         }
     }
 }

@@ -9,7 +9,7 @@ const scenarios = [
 	{
 		name: "shelf with PDF covers",
 		books: ["A Field Guide to Clouds", "The Shape of Quiet"],
-		bytes: 1500 * 1024,
+		bytes: 100 * 1024,
 	},
 ];
 
@@ -39,19 +39,18 @@ for (const scenario of scenarios) {
 				);
 				expect(audits["errors-in-console"]?.score).toBe(1);
 				const requests = audits["network-requests"]?.details;
-				const worker =
+				const urls =
 					requests?.type === "table"
-						? requests.items.find(
-								(item) =>
-									typeof item.url === "string" &&
-									item.url.includes("/assets/pdf.worker-"),
-							)
-						: undefined;
-				if (scenario.books.length > 0) {
-					expect(worker?.transferSize).toBeLessThan(550 * 1024);
-				} else {
-					expect(worker).toBeUndefined();
-				}
+						? requests.items.map((item) => String(item.url))
+						: [];
+				expect(
+					urls.some(
+						(url) => url.endsWith("/pdf") || url.includes("/assets/pdf"),
+					),
+				).toBe(false);
+				expect(urls.filter((url) => url.endsWith("/preview/1"))).toHaveLength(
+					scenario.books.length,
+				);
 				console.log({
 					scenario: scenario.name,
 					performance: categories.performance?.score,

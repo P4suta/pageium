@@ -1,5 +1,14 @@
-import { getLibrary, type Library, type Position, rescanLibrary } from "./api";
+import {
+	type Book,
+	type FolderLink,
+	getLibrary,
+	type Library,
+	type Position,
+	positionLabel,
+	rescanLibrary,
+} from "./api";
 import { element, icon, message } from "./dom";
+import { type ShelfLocation, shelfHref } from "./location";
 import { ShelfGrid } from "./shelf-grid";
 
 interface Browse {
@@ -7,20 +16,24 @@ interface Browse {
 	pin: string;
 	page: number;
 	pages: number;
+	hasFolders: boolean;
 }
 
 export class Shelf {
 	readonly view = element("main", "library");
 	#heading = element("h1", undefined, "Library");
+	#trail = element("nav", "folder-path");
+	#resumeLink = element("a", "resume-link");
 	#rescan = element("button", "shelf-rescan");
 	#scanStatus = element("p", "shelf-scan-status");
 	#scanning = false;
 	#tools = element("div", "shelf-tools");
 	#input = element("input");
-	#query = "";
+	#location: ShelfLocation = { folder: "", query: "" };
+	#focusHeading = false;
 	#total = element("p", "shelf-total");
 	#status = element("div");
-	#grid = new ShelfGrid();
+	#grid = new ShelfGrid(() => this.#location);
 	#tail = element("div", "shelf-tail");
 	#more = element("button", "shelf-more");
 	#moreLabel = element("span");
@@ -30,7 +43,7 @@ export class Shelf {
 	#active = false;
 	#failed = false;
 	#returnBook: string | undefined;
-	#recent: { id: string; position: Position } | undefined;
+	#recent: Book | undefined;
 	#observer = new IntersectionObserver(
 		(entries) => {
 			if (
@@ -56,7 +69,9 @@ export class Shelf {
 		this.#scanStatus.setAttribute("role", "status");
 		const title = element("div", "shelf-heading-row");
 		title.append(this.#heading, this.#rescan, this.#scanStatus);
-		header.append(brand, title);
+		this.#trail.setAttribute("aria-label", "Folder path");
+		this.#trail.hidden = true;
+		header.append(brand, this.#trail, title);
 
 		const field = element("label", "shelf-search");
 		this.#input.type = "search";
@@ -77,18 +92,41 @@ export class Shelf {
 			void this.#next(true);
 		});
 		this.#tail.hidden = true;
+		this.#resumeLink.hidden = true;
 		this.#tail.append(this.#more);
 		this.view.append(
 			header,
 			this.#tools,
+			this.#resumeLink,
 			this.#status,
 			this.#grid.view,
 			this.#tail,
 		);
 	}
 
-	async resume(book?: string, scroll = 0): Promise<void> {
+	async resume(
+		location: ShelfLocation,
+		book?: string,
+		scroll = 0,
+	): Promise<void> {
 		this.#active = true;
+		this.#cancel();
+		const moved = location.folder !== this.#location.folder;
+		if (moved || location.query !== this.#location.query) {
+			this.#discard();
+			this.#location = location;
+			this.#input.value = location.query;
+			this.#input.placeholder = location.folder
+				? "Search this folder and subfolders"
+				: "Search books by title or folder";
+			this.#tools.hidden = true;
+			this.#status.replaceChildren();
+			this.#scanStatus.textContent = "";
+			this.#showPath([]);
+			this.#focusHeading = moved && !book;
+			window.scrollTo(0, 0);
+		}
+		document.title = `${this.#heading.textContent} · Pageium`;
 		this.#grid.connect();
 		if (this.#browse) {
 			if (book) {
@@ -99,6 +137,13 @@ export class Shelf {
 			this.#returnBook = book;
 		}
 		await this.#load(1);
+		if (book && document.activeElement?.id === book) {
+			requestAnimationFrame(() => {
+				if (document.activeElement?.id === book) {
+					document.activeElement.scrollIntoView({ block: "nearest" });
+				}
+			});
+		}
 	}
 
 	pause(): void {
@@ -108,10 +153,12 @@ export class Shelf {
 		this.#grid.disconnect();
 	}
 
-	remember(id: string, position: Position, saved: Promise<void>): void {
-		const recent = { id, position };
+	remember(book: Book, position: Position, saved: Promise<void>): void {
+		const recent = { ...book, progress: position };
 		this.#recent = recent;
-		this.#grid.setRecent(id, position);
+		this.#grid.setRecent(book.id, position);
+		if (!this.#location.folder && !this.#location.query.trim())
+			this.#showResume(recent.folder_id ? recent : null);
 		void saved.then(() => {
 			if (this.#recent === recent) this.#recent = undefined;
 		});
@@ -125,8 +172,9 @@ export class Shelf {
 	}
 
 	#search(): void {
-		if (!this.#active || this.#query === this.#input.value) return;
-		this.#query = this.#input.value;
+		if (!this.#active || this.#location.query === this.#input.value) return;
+		this.#location = { ...this.#location, query: this.#input.value };
+		history.replaceState(history.state, "", shelfHref(this.#location));
 		this.#cancel();
 		this.#discard();
 		this.#status.replaceChildren();
@@ -163,6 +211,7 @@ export class Shelf {
 		this.#browse = null;
 		this.#failed = false;
 		this.#tail.hidden = true;
+		this.#resumeLink.hidden = true;
 		this.#grid.reset();
 	}
 
@@ -187,9 +236,10 @@ export class Shelf {
 		this.#request = request;
 		this.#grid.view.setAttribute("aria-busy", "true");
 		const pin = this.#browse?.pin;
+		const recent = this.#recent;
 		let result: Library;
 		try {
-			result = await getLibrary(page, this.#query, request.signal, pin);
+			result = await getLibrary(page, this.#location, request.signal, pin);
 		} catch {
 			result = { status: "unavailable" };
 		}
@@ -197,7 +247,17 @@ export class Shelf {
 		this.#request = null;
 		this.#grid.view.removeAttribute("aria-busy");
 
-		if (result.status !== "ready") {
+		if (result.status === "missing") {
+			this.#discard();
+			this.#tools.hidden = true;
+			this.#status.replaceChildren(
+				message(
+					"Folder unavailable",
+					"Open a parent folder to continue browsing.",
+					"folder",
+				),
+			);
+		} else if (result.status !== "ready") {
 			if (page > 1) this.#failed = true;
 			if (!this.#browse) this.#showWaiting(result.status);
 		} else if (page > 1 && result.revision !== this.#browse?.revision) {
@@ -206,7 +266,7 @@ export class Shelf {
 			return this.#load(1);
 		} else {
 			if (page > 1) this.#failed = false;
-			this.#accept(result, pin, manual);
+			this.#accept(result, pin, manual, recent);
 		}
 
 		this.#observeMore();
@@ -218,6 +278,7 @@ export class Shelf {
 		library: Extract<Library, { status: "ready" }>,
 		pin: string | undefined,
 		manual: boolean,
+		recent: Book | undefined,
 	): void {
 		const fresh = library.revision !== this.#browse?.revision;
 		const append = fresh || library.page > (this.#browse?.page ?? 0);
@@ -230,17 +291,28 @@ export class Shelf {
 			pin: pin ?? library.recent ?? "",
 			page: Math.max(library.page, this.#browse?.page ?? 0),
 			pages: library.pages,
+			hasFolders: library.directory.total_folders > 0,
 		};
-		const total =
+		const books =
 			library.total === 1
 				? "1 book"
 				: `${library.total.toLocaleString()} books`;
+		const folders = library.directory.total_folders;
+		const total = folders
+			? `${folders.toLocaleString()} ${folders === 1 ? "folder" : "folders"} · ${books}`
+			: books;
 		if (this.#total.textContent !== total) this.#total.textContent = total;
-		const query = this.#query.trim();
-		this.#tools.hidden = library.total === 0 && !query;
+		const query = this.#location.query.trim();
+		this.#tools.hidden = !library.total && !folders && !query;
+		if (library.page === 1) {
+			if (fresh) this.#showPath(library.directory.path);
+			if (recent && !this.#location.folder && !query)
+				this.#showResume(recent.folder_id ? recent : null);
+			else this.#showResume(library.directory.resume);
+		}
 		if (fresh || append) {
 			this.#status.replaceChildren();
-			if (!library.total) {
+			if (!library.total && !folders) {
 				this.#status.append(
 					query
 						? message(
@@ -248,28 +320,81 @@ export class Shelf {
 								"Try another title or folder.",
 								"search",
 							)
-						: message(
-								"No books yet",
-								"Save a PDF to your books folder, then select Rescan library.",
-							),
+						: this.#location.folder
+							? message(
+									"Folder is empty",
+									"Add a PDF or a folder here, then select Rescan library.",
+									"folder",
+								)
+							: message(
+									"No books yet",
+									"Save a PDF to your books folder, then select Rescan library.",
+								),
 				);
 			}
 		}
-		const id = this.#recent?.id ?? library.recent;
+		const id = recent?.id ?? library.recent;
 		const position =
-			this.#recent?.position ??
+			recent?.progress ??
 			library.books.find((book) => book.id === id)?.progress;
 		this.#grid.setRecent(id, position);
-		const first = append ? this.#grid.append(library.books) : undefined;
-		if (this.#recent)
-			this.#grid.setRecent(this.#recent.id, this.#recent.position);
+		const first = append
+			? this.#grid.append([...library.directory.folders, ...library.books])
+			: undefined;
+		if (recent) this.#grid.setRecent(recent.id, recent.progress);
 		const target = this.#returnBook ?? (manual ? first?.id : undefined);
 		this.#returnBook = undefined;
 		if (target) this.#focusBook(target);
+		else if (this.#focusHeading) this.#heading.focus({ preventScroll: true });
+		this.#focusHeading = false;
+	}
+
+	#showPath(path: FolderLink[]): void {
+		const folder = this.#location.folder;
+		const title = path.at(-1)?.name ?? (folder ? "Folder" : "Library");
+		this.#heading.textContent = title;
+		document.title = `${title} · Pageium`;
+		this.#trail.hidden = !folder;
+		if (!folder) return;
+		const list = element("ol");
+		for (const part of [{ id: "", name: "Library" }, ...path]) {
+			const item = element("li");
+			if (part.id === folder) {
+				item.setAttribute("aria-current", "page");
+				item.textContent = part.name;
+			} else {
+				const link = element("a");
+				link.href = shelfHref({ folder: part.id, query: "" });
+				link.append(
+					icon(part.id ? "folder" : "book"),
+					element("span", undefined, part.name),
+				);
+				item.append(link);
+			}
+			list.append(item);
+		}
+		this.#trail.replaceChildren(list);
+	}
+
+	#showResume(book: Book | null): void {
+		this.#resumeLink.hidden = !book?.progress;
+		if (!book?.progress) return;
+		this.#resumeLink.href = shelfHref(this.#location, book.id);
+		this.#resumeLink.dataset.book = book.id;
+		this.#resumeLink.replaceChildren(
+			icon("book"),
+			element("span", undefined, "Continue reading"),
+			element("strong", undefined, book.title),
+			element("span", "book-meta", positionLabel(book.progress)),
+		);
 	}
 
 	#focusBook(id: string): void {
-		if (this.#grid.focusBook(id)) return;
+		if (this.#grid.focusEntry(id)) return;
+		if (!this.#resumeLink.hidden && this.#resumeLink.dataset.book === id) {
+			this.#resumeLink.focus();
+			return;
+		}
 		const fallback = this.#tools.hidden ? this.#heading : this.#input;
 		fallback.focus();
 	}
@@ -295,9 +420,10 @@ export class Shelf {
 		this.#observer.disconnect();
 		const browse = this.#browse;
 		this.#tail.hidden = !browse || browse.page >= browse.pages;
+		const items = browse?.hasFolders ? "items" : "books";
 		this.#moreLabel.textContent = this.#failed
-			? "Retry loading books"
-			: "Load more books";
+			? `Retry loading ${items}`
+			: `Load more ${items}`;
 		if (!this.#tail.hidden && !this.#failed) this.#observer.observe(this.#tail);
 	}
 }

@@ -1,3 +1,5 @@
+import type { ShelfLocation } from "./location";
+
 export interface Position {
 	page: number;
 	total: number;
@@ -7,17 +9,32 @@ export interface Book {
 	id: string;
 	title: string;
 	folder: string;
+	folder_id: string;
 	progress: Position | null;
 	duplicate_title: boolean;
 }
 
 type Pending = { status: "scanning" } | { status: "unavailable" };
 
+export interface FolderLink {
+	id: string;
+	name: string;
+}
+
+interface Directory {
+	path: FolderLink[];
+	folders: FolderLink[];
+	total_folders: number;
+	resume: Book | null;
+}
+
 export type Library =
 	| Pending
+	| { status: "missing" }
 	| {
 			status: "ready";
 			books: Book[];
+			directory: Directory;
 			recent: string | null;
 			revision: string;
 			page: number;
@@ -58,8 +75,27 @@ function isBook(value: unknown): value is Book {
 		isBookId(value.id) &&
 		typeof value.title === "string" &&
 		typeof value.folder === "string" &&
+		(value.folder_id === "" || isBookId(value.folder_id)) &&
 		typeof value.duplicate_title === "boolean" &&
 		(value.progress === null || isPosition(value.progress))
+	);
+}
+
+function isFolder(value: unknown): value is FolderLink {
+	return (
+		isObject(value) && isBookId(value.id) && typeof value.name === "string"
+	);
+}
+
+function isDirectory(value: unknown): value is Directory {
+	return (
+		isObject(value) &&
+		Array.isArray(value.path) &&
+		value.path.every(isFolder) &&
+		Array.isArray(value.folders) &&
+		value.folders.every(isFolder) &&
+		isCount(value.total_folders) &&
+		(value.resume === null || isBook(value.resume))
 	);
 }
 
@@ -74,6 +110,7 @@ function parseLibrary(value: unknown): Library {
 		value.status === "ready" &&
 		Array.isArray(value.books) &&
 		value.books.every(isBook) &&
+		isDirectory(value.directory) &&
 		isPage(value.page) &&
 		isPage(value.pages) &&
 		value.page <= value.pages &&
@@ -84,6 +121,7 @@ function parseLibrary(value: unknown): Library {
 		return {
 			status: "ready",
 			books: value.books,
+			directory: value.directory,
 			recent: value.recent,
 			revision: value.revision,
 			page: value.page,
@@ -96,14 +134,15 @@ function parseLibrary(value: unknown): Library {
 
 export async function getLibrary(
 	page: number,
-	query: string,
+	{ folder, query }: ShelfLocation,
 	signal: AbortSignal,
 	pin?: string,
 ): Promise<Library> {
-	const filter = new URLSearchParams({ page: String(page) });
+	const filter = new URLSearchParams({ page: String(page), folder });
 	if (query) filter.set("q", query);
 	if (pin !== undefined) filter.set("pin", pin);
 	const response = await fetch(`/api/library?${filter}`, { signal });
+	if (response.status === 404 && folder) return { status: "missing" };
 	if (!response.ok) {
 		throw new Error("Library unavailable");
 	}
@@ -122,6 +161,10 @@ export async function rescanLibrary(): Promise<void> {
 
 export function bookUrl(id: string): string {
 	return `/api/books/${encodeURIComponent(id)}`;
+}
+
+export function previewUrl(id: string, page: number): string {
+	return `${bookUrl(id)}/preview/${page}`;
 }
 
 export async function getBook(

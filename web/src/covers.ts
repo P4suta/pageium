@@ -1,108 +1,91 @@
-import type { PDFDocumentLoadingTask } from "pdfjs-dist";
+import { previewUrl } from "./api";
 import { element } from "./dom";
-import { clearCanvas, paintPage, pdfLoader } from "./pdf";
-
-interface Thumbnail {
-	id: string;
-	cover: HTMLElement;
-	cancellation: AbortController;
-	loading?: PDFDocumentLoadingTask;
-	disposal?: Promise<void>;
-}
 
 export class Covers {
-	#observed = new Map<HTMLElement, Thumbnail>();
-	#pending = new Set<Thumbnail>();
-	#active = 0;
+	#books = new Map<HTMLElement, string>();
+	#pending = new Set<HTMLElement>();
+	#loading = new Map<HTMLElement, HTMLImageElement>();
 	#observer = new IntersectionObserver(
 		(entries) => {
 			for (const { isIntersecting, target } of entries) {
-				if (!isIntersecting || !(target instanceof HTMLElement)) continue;
-				const thumbnail = this.#observed.get(target);
-				if (!thumbnail) continue;
-				this.#observer.unobserve(target);
-				this.#pending.add(thumbnail);
+				if (!(target instanceof HTMLElement) || !this.#books.has(target))
+					continue;
+				if (!isIntersecting) this.#cancel(target);
+				else if (!this.#loading.has(target)) this.#pending.add(target);
 			}
-			this.#pump();
+			this.#loadVisible();
 		},
 		{ rootMargin: "120px" },
 	);
 
+	constructor() {
+		if (document.readyState !== "complete") {
+			window.addEventListener(
+				"load",
+				() => {
+					for (const cover of this.#books.keys()) this.#observer.observe(cover);
+				},
+				{ once: true },
+			);
+		}
+	}
+
 	watch(cover: HTMLElement, id: string): void {
-		this.#observed.set(cover, {
-			id,
-			cover,
-			cancellation: new AbortController(),
-		});
-		this.#observer.observe(cover);
+		this.#books.set(cover, id);
+		cover.append(element("span", "cover-status", "Loading cover…"));
+		if (document.readyState === "complete") this.#observer.observe(cover);
 	}
 
 	unwatch(cover: HTMLElement): void {
-		const job = this.#observed.get(cover);
-		if (!job) return;
 		this.#observer.unobserve(cover);
-		this.#observed.delete(cover);
-		this.#pending.delete(job);
-		job.cancellation.abort();
-		void this.#dispose(job);
-		const canvas = cover.querySelector("canvas");
-		if (canvas) clearCanvas(canvas);
+		this.#books.delete(cover);
+		this.#cancel(cover);
 	}
 
-	#dispose(job: Thumbnail): Promise<void> | undefined {
-		job.disposal ??= job.loading?.destroy().catch(() => {});
-		return job.disposal;
+	#cancel(cover: HTMLElement): void {
+		this.#pending.delete(cover);
+		const image = this.#loading.get(cover);
+		if (!image) return;
+		this.#loading.delete(cover);
+		image.removeAttribute("src");
+		image.remove();
+		queueMicrotask(() => this.#loadVisible());
 	}
 
-	#current(job: Thumbnail): boolean {
-		return this.#observed.get(job.cover) === job && job.cover.isConnected;
-	}
-
-	#pump(): void {
-		while (this.#active < 2) {
-			const job = this.#pending.values().next().value;
-			if (!job) return;
-			this.#pending.delete(job);
-			if (!this.#current(job)) continue;
-			this.#active += 1;
-			void this.#draw(job);
+	#loadVisible(): void {
+		for (const cover of this.#pending) {
+			if (this.#loading.size >= 2) return;
+			this.#pending.delete(cover);
+			const id = this.#books.get(cover);
+			if (!id) continue;
+			const image = element("img");
+			this.#loading.set(cover, image);
+			image.alt = "";
+			image.decoding = "async";
+			image.hidden = true;
+			cover.append(image);
+			image.src = previewUrl(id, 1);
+			void image.decode().then(
+				() => this.#finish(cover, image, true),
+				() => this.#finish(cover, image, false),
+			);
 		}
 	}
 
-	async #draw(job: Thumbnail): Promise<void> {
-		const canvas = element("canvas");
-		const cancelled = new Promise<boolean>((resolve) => {
-			job.cancellation.signal.addEventListener("abort", () => resolve(false), {
-				once: true,
-			});
-		});
-		let rendered = false;
-		try {
-			rendered = await Promise.race([this.#paint(job, canvas), cancelled]);
-		} catch {
-			if (this.#current(job)) job.cover.classList.add("cover--unavailable");
-		} finally {
-			if (!rendered) clearCanvas(canvas);
-			await this.#dispose(job);
-			delete job.loading;
-			delete job.disposal;
-			this.#active -= 1;
-			this.#pump();
+	#finish(cover: HTMLElement, image: HTMLImageElement, ready: boolean): void {
+		if (this.#loading.get(cover) !== image) return;
+		this.#loading.delete(cover);
+		this.#books.delete(cover);
+		this.#observer.unobserve(cover);
+		const status = cover.querySelector(".cover-status");
+		if (ready) {
+			cover.querySelector(".icon")?.remove();
+			status?.remove();
+			image.hidden = false;
+		} else {
+			status?.replaceChildren("Preview unavailable");
+			image.remove();
 		}
-	}
-
-	async #paint(job: Thumbnail, canvas: HTMLCanvasElement): Promise<boolean> {
-		const load = await pdfLoader();
-		if (!this.#current(job)) return false;
-		job.loading = load(job.id);
-		const pdf = await job.loading.promise;
-		if (!this.#current(job)) return false;
-		const page = await pdf.getPage(1);
-		const { cover } = job;
-		if (!this.#current(job) || !cover.clientWidth) return false;
-		await paintPage(page, canvas, cover.clientWidth, 110_000).promise;
-		if (!this.#current(job)) return false;
-		cover.replaceChildren(canvas);
-		return true;
+		this.#loadVisible();
 	}
 }

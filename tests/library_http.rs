@@ -75,6 +75,151 @@ struct CatalogPage {
     total: usize,
 }
 
+#[derive(Deserialize)]
+struct FolderPage {
+    #[serde(flatten)]
+    catalog: CatalogPage,
+    directory: DirectoryView,
+}
+
+#[derive(Deserialize)]
+struct DirectoryView {
+    path: Vec<FolderLink>,
+    folders: Vec<FolderLink>,
+    total_folders: usize,
+    resume: Option<BookView>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct FolderLink {
+    id: String,
+    name: String,
+}
+
+async fn folder_page(app: &Pageium, folder: &str, query: &str) -> Result<FolderPage> {
+    let uri = format!("/api/library?folder={folder}&{query}");
+    let response = request(app.router(), Method::GET, &uri, &[], Body::empty()).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(serde_json::from_slice(&body(response).await?)?)
+}
+
+#[tokio::test]
+async fn browses_scanned_folders_and_searches_only_the_selected_branch() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let root = fixture.directory.path().join("books");
+    for path in ["Novels/2026 #1", "Novels/Empty", "Novels Extra/Empty"] {
+        fs::create_dir_all(root.join(path))?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("Novels"), root.join("Alias"))?;
+    for path in [
+        "Loose.pdf",
+        "Novels/Atlas.pdf",
+        "Novels/2026 #1/Atlas.pdf",
+        "Novels Extra/Atlas.pdf",
+    ] {
+        fs::write(root.join(path), PDF)?;
+    }
+    fixture.app.refresh().await;
+    let app = &fixture.app;
+    let home = folder_page(app, "", "page=1").await?;
+    assert!(home.directory.path.is_empty());
+    assert_eq!(home.catalog.total, 1);
+    assert_eq!(home.catalog.books[0].title, "Loose");
+    let folders = &home.directory.folders;
+    assert_eq!(
+        folders.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+        ["Novels", "Novels Extra"]
+    );
+    let novels = folder_page(app, &folders[0].id, "page=1").await?;
+    assert_eq!(novels.directory.path, folders[..1]);
+    assert_eq!(novels.catalog.total, 1);
+    assert_eq!(novels.catalog.books[0].title, "Atlas");
+    assert_eq!(novels.directory.folders.len(), 2);
+    let child = &novels.directory.folders[0];
+    let nested = folder_page(app, &child.id, "page=1").await?;
+    assert_eq!(
+        nested
+            .directory
+            .path
+            .iter()
+            .map(|f| &f.id)
+            .collect::<Vec<_>>(),
+        [&folders[0].id, &child.id]
+    );
+    let search = folder_page(app, &folders[0].id, "q=ATLAS&page=1").await?;
+    assert_eq!(search.catalog.total, 2);
+    assert!(search.directory.folders.is_empty());
+    assert_eq!(
+        folder_page(app, "", "q=2026&page=1").await?.catalog.total,
+        1
+    );
+    let empty = &novels.directory.folders[1];
+    assert_eq!(empty.name, "Empty");
+    assert_eq!(
+        folder_page(app, &empty.id, "page=1").await?.catalog.total,
+        0
+    );
+    let id = &nested.catalog.books[0].id;
+    let response = request(
+        app.router(),
+        Method::PUT,
+        &format!("/api/books/{id}/progress"),
+        &[("content-type", "application/json")],
+        Body::from(r#"{"page":2,"total":4}"#),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        folder_page(app, "", "page=1")
+            .await?
+            .directory
+            .resume
+            .map(|b| b.id),
+        Some(id.clone())
+    );
+    assert!(
+        folder_page(app, &child.id, "page=1")
+            .await?
+            .directory
+            .resume
+            .is_none()
+    );
+    assert_eq!(shelf(app).await?.books.len(), 4);
+
+    fs::remove_dir(root.join("Novels/Empty"))?;
+    assert_eq!(scan(app).await?, StatusCode::NO_CONTENT);
+    let refreshed = folder_page(app, &folders[0].id, "page=1").await?;
+    assert_ne!(refreshed.catalog.revision, home.catalog.revision);
+    assert_eq!(refreshed.directory.folders, novels.directory.folders[..1]);
+    let removed = format!("/api/library?folder={}", empty.id);
+    let response = request(app.router(), Method::GET, &removed, &[], Body::empty()).await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pages_across_folders_and_books_without_repeating_either() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let root = fixture.directory.path().join("books");
+    for i in 1..=49 {
+        fs::create_dir(root.join(format!("Collection {i:02}")))?;
+    }
+    fs::write(root.join("Atlas.pdf"), PDF)?;
+    fixture.app.refresh().await;
+    let first = folder_page(&fixture.app, "", "page=1").await?;
+    assert_eq!(first.directory.folders.len(), 48);
+    assert_eq!(first.directory.total_folders, 49);
+    assert_eq!(first.catalog.pages, 2);
+    assert!(first.catalog.books.is_empty());
+    let second = folder_page(&fixture.app, "", "page=2").await?;
+    assert_eq!(second.directory.folders.len(), 1);
+    assert_eq!(second.directory.folders[0].name, "Collection 49");
+    assert_eq!(second.catalog.total, 1);
+    assert_eq!(second.catalog.books[0].title, "Atlas");
+    Ok(())
+}
+
 #[tokio::test]
 async fn keeps_scroll_order_when_the_most_recent_book_changes() -> Result<()> {
     let fixture = Fixture::empty()?;
@@ -325,6 +470,31 @@ fn rejects_a_library_path_whose_parent_is_a_file() -> Result<()> {
     settings.books = file.join("books");
     assert!(Pageium::open(settings).is_err());
     assert!(!directory.path().join("state").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn serves_a_cached_preview_only_for_the_current_book_version() -> Result<()> {
+    let fixture = Fixture::one_book().await?;
+    let id = &shelf(&fixture.app).await?.books[0].id;
+    let cache = fixture.directory.path().join("state/previews.sqlite3");
+    let jpeg = b"\xff\xd8\xff\xd9";
+    rusqlite::Connection::open(cache)?.execute(
+        "INSERT INTO previews(book,page,jpeg) VALUES (?1, 1, ?2)",
+        rusqlite::params![id, jpeg],
+    )?;
+    let uri = format!("/api/books/{id}/preview/1");
+    let current = request(fixture.app.router(), Method::GET, &uri, &[], Body::empty()).await?;
+    assert_eq!(current.status(), StatusCode::OK);
+    assert_eq!(current.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert_eq!(body(current).await?, jpeg.as_slice());
+    fs::write(
+        fixture.directory.path().join("books/scans/海辺の町.PDF"),
+        b"Updated",
+    )?;
+    let expired = request(fixture.app.router(), Method::GET, &uri, &[], Body::empty()).await?;
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+    assert_eq!(expired.headers()[header::CACHE_CONTROL], "no-store");
     Ok(())
 }
 
