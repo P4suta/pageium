@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { firstBookId, fixturePdf, withLibrary } from "./fixtures";
 
 const paper = (page: Page, number: number) =>
-	page.getByRole("img", { name: `Page ${number}`, exact: true });
+	page.getByRole("group", { name: `Page ${number}`, exact: true });
 
 async function resume(page: Page, url: string, number: number, total: number) {
 	const id = await firstBookId(page.request, url);

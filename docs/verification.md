@@ -67,6 +67,16 @@ It checks the cover dimensions while the card moves.
 With reduced motion, an inset shadow indicates a press.
 [Activation pseudo-class](https://www.w3.org/TR/selectors-4/#the-active-pseudo), [Inset shadows](https://www.w3.org/TR/css-backgrounds-3/#the-box-shadow)
 
+The reader theme tests compare search and contents with the shelf and the Fit width button in light and dark appearances.
+They check the panel surfaces, the inset search field, and the outline around a search match.
+[Use of color](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html), [Non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)
+
+The first-search scenarios count matches while a distant PDF byte range is unavailable and check highlights across Japanese line breaks and invisible text from optical character recognition.
+They replace a prepared PDF and check that the server removes its obsolete text.
+The password scenario checks that the cache excludes books that require a password.
+The copy-restriction scenario checks that the server returns match positions and keeps the prepared text private.
+[PDF.js find controller](https://github.com/mozilla/pdf.js/blob/v6.5.438/web/pdf_find_controller.js)
+
 The wheel tests approach page starts from both directions and check that the fitted reader snaps into place.
 They check free scrolling inside tall pages, while magnified, and with reduced motion.
 Returning to the fitted scale preserves the reading point until the next vertical scroll.

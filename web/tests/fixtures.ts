@@ -82,6 +82,42 @@ export function ruledScan(): Buffer {
 	]);
 }
 
+export function annotatedBook(): Buffer {
+	const stream = (content: string) =>
+		`<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+	const image = "q 600 0 0 780 0 0 cm /Scan Do Q";
+	const resources =
+		"/Resources << /Font << /F1 6 0 R /JP 7 0 R >> /XObject << /Scan 18 0 R >> >>";
+	const page = (contents: number, extra = "") =>
+		`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 780] ${resources} /Contents ${contents} 0 R ${extra} >>`;
+	return pdfObjects([
+		"<< /Type /Catalog /Pages 2 0 R /Outlines 14 0 R /Names << /Dests 17 0 R >> >>",
+		"<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 5 0 R] >>",
+		page(9, "/Annots [12 0 R 13 0 R 20 0 R]"),
+		page(10, "/CropBox [40 80 560 740] /Rotate 90 /Annots [19 0 R]"),
+		page(11),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+		"<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiKakuGo-W5 /Encoding /UniJIS-UTF16-H /DescendantFonts [8 0 R] >>",
+		"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiKakuGo-W5 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>",
+		stream(
+			"BT /JP 24 Tf 50 580 Td <65E5672C> Tj 0 -32 Td <8A9E> Tj ET\nBT /F1 18 Tf 45 305 Td (Footnote) Tj 0 -55 Td (Reference) Tj ET",
+		),
+		stream(
+			`${image}\nBT 3 Tr /F1 22 Tf 330 610 Td (OCR passage) Tj ET\nBT 3 Tr /JP 20 Tf 190 300 Td <65E5672C8A9E> Tj ET`,
+		),
+		stream(image),
+		"<< /Type /Annot /Subtype /Link /Rect [45 300 175 326] /Contents (Footnote) /Dest (note) >>",
+		"<< /Type /Annot /Subtype /Link /Rect [45 245 215 270] /Contents (Reference) /A << /S /URI /URI (https://example.org/reference) >> >>",
+		"<< /Type /Outlines /First 15 0 R /Last 15 0 R /Count 2 >>",
+		"<< /Title (Chapter) /Parent 14 0 R /Dest [3 0 R /Fit] /First 16 0 R /Last 16 0 R /Count 1 >>",
+		"<< /Title (Notes) /Parent 15 0 R /Dest [4 0 R /XYZ 400 610 6] >>",
+		"<< /Names [(note) [4 0 R /XYZ 400 610 6]] >>",
+		"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 3 >>\nstream\nDD>\nendstream",
+		"<< /Type /Annot /Subtype /Link /Rect [120 180 165 208] /Contents (Sources) /A << /S /URI /URI (http://example.org/sources) >> >>",
+		"<< /Type /Annot /Subtype /Link /Rect [45 190 170 218] /Contents (Email) /A << /S /URI /URI (mailto:editor@example.org) >> >>",
+	]);
+}
+
 function pdfObjects(objects: string[]): Buffer {
 	let pdf = "%PDF-1.7\n";
 	const offsets = ["0000000000 65535 f "];

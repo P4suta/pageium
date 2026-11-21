@@ -1,0 +1,251 @@
+.reader-header:has(.book-tools) {
+	grid-template-areas:
+		"back position"
+		"title fit"
+		"navigation navigation";
+}
+
+.book-tools {
+	grid-area: navigation;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.book-action {
+	justify-content: center;
+}
+
+.book-panels .book-action {
+	padding-inline: 0;
+}
+
+.book-panels {
+	position: absolute;
+	z-index: 2;
+	inset-inline-end: max(12px, env(safe-area-inset-right));
+	inset-block-end: max(12px, env(safe-area-inset-bottom));
+	inline-size: max-content;
+	max-inline-size: calc(
+		100% -
+		max(12px, env(safe-area-inset-left)) -
+		max(12px, env(safe-area-inset-right))
+	);
+}
+
+.book-find,
+.book-contents,
+.book-link-notice:not(:empty) {
+	padding: 1rem;
+	border-radius: 22px;
+	background: var(--base);
+	box-shadow: var(--card-depth);
+}
+
+.book-find:not([hidden]) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.book-query input {
+	max-inline-size: 15em;
+}
+
+.book-find [role="status"] {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+.book-find [role="status"]:empty {
+	display: none;
+}
+.book-contents:not([hidden]) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0.75rem;
+	inline-size: 24rem;
+	max-inline-size: 100%;
+	max-block-size: min(60dvh, 36rem);
+	overflow: auto;
+}
+
+.book-contents h2 {
+	font-size: 1.25rem;
+	font-weight: 600;
+}
+.book-link-notice {
+	color: var(--error);
+}
+.book-outline {
+	grid-column: 1 / -1;
+	overflow-wrap: anywhere;
+}
+.book-outline ul {
+	list-style: none;
+	padding-inline-start: 1em;
+}
+.book-outline > ul {
+	padding: 0;
+}
+.book-outline li > ul {
+	border-inline-start: 1px solid var(--muted);
+}
+.book-outline a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 48px;
+	min-width: 48px;
+	font-size: 1.125rem;
+	text-decoration: underline;
+	text-underline-offset: 0.18em;
+}
+
+@media (max-width: 30rem) {
+	.book-find:not([hidden]) {
+		grid-template-columns: 1fr 1fr auto;
+	}
+	.book-query {
+		grid-column: 1 / -1;
+	}
+}
+
+@media (min-width: 700px) {
+	.reader-header:has(.book-tools) {
+		grid-template-areas:
+			"back title fit position"
+			"navigation navigation navigation navigation";
+	}
+}
+
+@media (min-width: 60rem) {
+	.reader-header:has(.book-tools) {
+		grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+		grid-template-areas: "back title navigation fit position";
+	}
+}
+
+.pdf-page {
+	--annotation-ink: color-mix(
+		in srgb,
+		var(--accent) 40%,
+		light-dark(var(--ink), var(--base))
+	);
+	isolation: isolate;
+}
+.page-text,
+.page-links {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+.page-text {
+	--scale-round-x: 0.01px;
+	--scale-round-y: 0.01px;
+	transform-origin: 0 0;
+	overflow: clip;
+	z-index: 1;
+	line-height: 1;
+	letter-spacing: normal;
+	word-spacing: normal;
+	text-align: initial;
+	-webkit-text-size-adjust: none;
+	text-size-adjust: none;
+	forced-color-adjust: none;
+}
+
+.page-text[data-main-rotation="90"] {
+	transform: rotate(90deg) translateY(-100%);
+}
+.page-text[data-main-rotation="180"] {
+	transform: rotate(180deg) translate(-100%, -100%);
+}
+.page-text[data-main-rotation="270"] {
+	transform: rotate(270deg) translateX(-100%);
+}
+
+.page-text :is(span, br) {
+	position: absolute;
+	color: transparent;
+	white-space: pre;
+	transform-origin: 0 0;
+	font-size: calc(
+		var(--font-height) *
+		var(--total-scale-factor) *
+		var(--min-font-size)
+	);
+	transform: rotate(var(--rotate, 0deg)) scaleX(var(--scale-x, 1))
+		scale(calc(1 / var(--min-font-size)));
+	pointer-events: auto;
+	cursor: text;
+	-webkit-user-select: text;
+	user-select: text;
+}
+.page-text ::selection {
+	color: var(--ink);
+	background: color-mix(in srgb, var(--accent) 35%, var(--base));
+}
+.page-text mark {
+	position: relative;
+	color: inherit;
+	background: color-mix(in srgb, var(--accent) 24%, transparent);
+	outline: 2px solid var(--annotation-ink);
+}
+.page-text mark::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border: 1px solid var(--paper);
+	pointer-events: none;
+}
+
+.page-links {
+	z-index: 2;
+}
+.page-links a {
+	position: absolute;
+	pointer-events: auto;
+	border-bottom: 2px solid var(--annotation-ink);
+	box-shadow: inset 0 -1px var(--paper);
+}
+.page-links a:is(:hover, :focus-visible) {
+	outline: 2px solid var(--annotation-ink);
+	outline-offset: -2px;
+	box-shadow: inset 0 0 0 3px var(--paper);
+}
+
+@media (forced-colors: active) {
+	.book-action,
+	.book-query,
+	.book-find,
+	.book-contents,
+	.book-link-notice:not(:empty) {
+		border: 1px solid CanvasText;
+	}
+	.book-action:disabled {
+		color: GrayText;
+		border-color: GrayText;
+		opacity: 1;
+	}
+	.page-text ::selection {
+		color: HighlightText;
+		background: Highlight;
+	}
+	.page-text mark {
+		background: transparent;
+		outline-color: Highlight;
+	}
+	.page-text mark::after {
+		border-color: Canvas;
+	}
+	.page-links a {
+		border-color: LinkText;
+	}
+	.page-links a:is(:hover, :focus-visible) {
+		outline-color: LinkText;
+	}
+}

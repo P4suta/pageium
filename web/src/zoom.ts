@@ -82,6 +82,10 @@ export class PaperZoom {
 		this.#animate(1);
 	}
 
+	settle(): void {
+		this.#finish();
+	}
+
 	refit(changeFit: () => void): void {
 		this.#finish();
 		const point = this.#point();

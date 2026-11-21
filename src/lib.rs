@@ -1,8 +1,10 @@
+mod book_text;
 mod books;
 mod database;
 mod previews;
 mod progress;
 mod range;
+mod search;
 mod web;
 
 use std::{
@@ -37,6 +39,7 @@ struct Service {
     scan: Mutex<Option<broadcast::Sender<ScanOutcome>>>,
     progress: Store,
     previews: previews::Previews,
+    book_text: Option<book_text::BookText>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +80,9 @@ impl Pageium {
                 scan: Mutex::new(None),
                 progress,
                 previews: previews::Previews::open(&state),
+                book_text: book_text::BookText::open(&state, &paths.web)
+                    .inspect_err(|_| tracing::warn!("Book text cache unavailable"))
+                    .ok(),
             }),
             web: paths.web,
         })
@@ -110,7 +116,6 @@ impl Service {
         let service = Arc::clone(self);
         tokio::spawn(async move {
             let (outcome, covers) = service.scan_catalog().await;
-            *service.scan.lock().await = None;
             if !covers.is_empty() {
                 let warm = tokio::spawn(async move {
                     service
@@ -138,15 +143,23 @@ impl Service {
                 Catalog::Unavailable
             }
         };
+        let catalog = Arc::new(catalog);
+        if matches!(catalog.as_ref(), Catalog::Ready { .. })
+            && let Some(text) = &self.book_text
+        {
+            text.prepare(Arc::clone(&self.source), Arc::clone(&catalog))
+                .await;
+        }
         let mut current = self.catalog.write().await;
-        if matches!(catalog, Catalog::Ready { .. }) {
-            let catalog = Arc::new(catalog);
+        // A rescan requested after publication must inspect the directory again.
+        *self.scan.lock().await = None;
+        if matches!(catalog.as_ref(), Catalog::Ready { .. }) {
             let previous = std::mem::replace(&mut *current, Arc::clone(&catalog));
             drop(current);
             (ScanOutcome::Ready, catalog.newest_additions(&previous, 8))
         } else {
             if !matches!(current.as_ref(), Catalog::Ready { .. }) {
-                *current = Arc::new(catalog);
+                *current = catalog;
             }
             (ScanOutcome::Unavailable, Vec::new())
         }

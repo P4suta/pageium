@@ -19,7 +19,7 @@ test("paints the whole landscape original during continuous scrolling without a 
 			await page.goto(url);
 			await page.locator(".book").click();
 			await expect(page.locator(".pdf-page canvas").first()).toBeVisible();
-			const target = page.getByRole("img", { name: "Page 8", exact: true });
+			const target = page.getByRole("group", { name: "Page 8", exact: true });
 			const sample = await target.evaluate(async (paper: HTMLElement) => {
 				const pane = paper.closest("main");
 				if (!pane) throw new Error("Missing reading area");
@@ -61,14 +61,17 @@ test("pans to the far edge of a magnified landscape neighbor while reading a por
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const landscape = page.getByRole("img", { name: "Page 2", exact: true });
+			const landscape = page.getByRole("group", {
+				name: "Page 2",
+				exact: true,
+			});
 			await expect
 				.poll(() =>
 					landscape.evaluate((el) => el.clientWidth > el.clientHeight),
 				)
 				.toBe(true);
 			for (let step = 0; step < 6; step++) await page.keyboard.press("+");
-			const first = page.getByRole("img", { name: "Page 1", exact: true });
+			const first = page.getByRole("group", { name: "Page 1", exact: true });
 			await first.evaluate((paper: HTMLElement) => {
 				const pane = paper.closest("main");
 				if (pane)
@@ -106,7 +109,7 @@ test("keeps the newly reached page when the scroll pane resizes before the next 
 		await page.goto(url);
 		await page.locator(".book").click();
 		await expect(page.locator(".pdf-page canvas").first()).toBeVisible();
-		const target = page.getByRole("img", { name: "Page 4", exact: true });
+		const target = page.getByRole("group", { name: "Page 4", exact: true });
 		await target.evaluate((el: HTMLElement) => {
 			const pane = el.closest("main");
 			if (!pane) throw new Error("Missing reading area");
@@ -160,13 +163,19 @@ for (const zoom of [1, 2]) {
 					await page.keyboard.press("+");
 					await page.keyboard.press("+");
 				}
-				const current = page.getByRole("img", { name: "Page 8", exact: true });
+				const current = page.getByRole("group", {
+					name: "Page 8",
+					exact: true,
+				});
 				await current.evaluate((el) => {
 					if (!(el instanceof HTMLElement)) throw new Error("Missing paper");
 					el.closest("main")?.scrollTo(0, el.offsetTop + 160);
 				});
 				await expect(current.locator("canvas").first()).toBeVisible();
-				const previous = page.getByRole("img", { name: "Page 6", exact: true });
+				const previous = page.getByRole("group", {
+					name: "Page 6",
+					exact: true,
+				});
 				await expect
 					.poll(() =>
 						previous
@@ -239,7 +248,10 @@ for (const fitWidth of [false, true]) {
 				);
 				expect(saved.ok()).toBe(true);
 				await page.goto(`${url}/#book=${id}`);
-				const paper = page.getByRole("img", { name: "Page 800", exact: true });
+				const paper = page.getByRole("group", {
+					name: "Page 800",
+					exact: true,
+				});
 				await expect(paper.locator("canvas").first()).toBeVisible();
 				if (fitWidth) {
 					await page
@@ -372,7 +384,7 @@ for (const fitWidth of [false, true]) {
 				await expect(page.locator(".page-position")).toHaveText(
 					"Page 816 of 816",
 				);
-				const last = page.getByRole("img", { name: "Page 816", exact: true });
+				const last = page.getByRole("group", { name: "Page 816", exact: true });
 				await expect(last.locator(".page-detail")).toBeVisible();
 				await page.keyboard.press("0");
 				await expect
@@ -399,7 +411,7 @@ test("ends a pinch at the fitted position from opposite corners of a zoomed book
 			const pane = page.locator(".reader-scroll");
 			await expect(
 				page
-					.getByRole("img", { name: "Page 1", exact: true })
+					.getByRole("group", { name: "Page 1", exact: true })
 					.locator("canvas")
 					.first(),
 			).toBeVisible();
@@ -413,7 +425,7 @@ test("ends a pinch at the fitted position from opposite corners of a zoomed book
 						),
 					number === 6,
 				);
-				const paper = page.getByRole("img", {
+				const paper = page.getByRole("group", {
 					name: `Page ${number}`,
 					exact: true,
 				});
@@ -464,7 +476,7 @@ test("combines a desktop pinch wheel, keyboard zoom and fit width", async ({
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const paper = page.getByRole("img", { name: "Page 1", exact: true });
+			const paper = page.getByRole("group", { name: "Page 1", exact: true });
 			await expect(paper.locator("canvas").first()).toBeVisible();
 			const width = () =>
 				paper.evaluate((el) => el.getBoundingClientRect().width);
@@ -510,7 +522,7 @@ test("keeps the full paper painted while zoom reverses and pans without a previe
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const paper = page.getByRole("img", { name: "Page 1", exact: true });
+			const paper = page.getByRole("group", { name: "Page 1", exact: true });
 			await expect(paper.locator("canvas")).toBeVisible();
 			for (let step = 0; step < 4; step++) await page.keyboard.press("+");
 			await expect(paper.locator(".page-detail")).toBeVisible();
@@ -607,7 +619,7 @@ test("zooms around the reading point across frames and respects reduced motion",
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const paper = page.getByRole("img", { name: "Page 1", exact: true });
+			const paper = page.getByRole("group", { name: "Page 1", exact: true });
 			await expect(paper.locator("canvas")).toBeVisible();
 			const sample = () =>
 				paper.evaluate(async (surface) => {
@@ -656,6 +668,10 @@ test("prepares a newly scanned cover before the first shelf visit", async ({
 			headers: { "Content-Type": "application/json" },
 		});
 		expect(result.status()).toBe(204);
+		const shelf = await (await page.request.get(`${url}/api/library`)).json();
+		expect(shelf.books).toEqual([
+			expect.objectContaining({ title: "New scan" }),
+		]);
 		const db = new DatabaseSync(join(booksPath, "../state/previews.sqlite3"), {
 			readOnly: true,
 		});
@@ -680,7 +696,7 @@ test("preserves color on JPEG and JPEG 2000 scan pages", async ({ page }) => {
 			await page.goto(url);
 			await page.locator(".book").click();
 			for (const number of [1, 2]) {
-				const paper = page.getByRole("img", {
+				const paper = page.getByRole("group", {
 					name: `Page ${number}`,
 					exact: true,
 				});
@@ -725,7 +741,7 @@ test("renders JBIG2 ink and distinct Japanese glyphs without an embedded font", 
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const scan = page.getByRole("img", { name: "Page 1", exact: true });
+			const scan = page.getByRole("group", { name: "Page 1", exact: true });
 			const tones = await scan.locator("canvas").evaluate((canvas) => {
 				if (!(canvas instanceof HTMLCanvasElement))
 					throw new Error("Missing scan canvas");
@@ -738,7 +754,7 @@ test("renders JBIG2 ink and distinct Japanese glyphs without an embedded font", 
 				);
 			});
 			expect(tones).toEqual([0, 255]);
-			const text = page.getByRole("img", { name: "Page 2", exact: true });
+			const text = page.getByRole("group", { name: "Page 2", exact: true });
 			await text.scrollIntoViewIfNeeded();
 			const glyphs = await text.locator("canvas").evaluate((canvas) => {
 				if (!(canvas instanceof HTMLCanvasElement))
@@ -827,7 +843,7 @@ test("renders at the physical display density after a mobile pinch", async ({
 			async (url) => {
 				await page.goto(url);
 				await page.locator(".book").click();
-				const first = page.getByRole("img", { name: "Page 1", exact: true });
+				const first = page.getByRole("group", { name: "Page 1", exact: true });
 				await expect(first.locator("canvas")).toBeVisible();
 				const session = await page.context().newCDPSession(page);
 				await session.send("Emulation.setPageScaleFactor", {
@@ -862,7 +878,29 @@ test("unlocks an encrypted document after an incorrect password", async ({
 	const bytes = await readFile(new URL("./locked.pdf", import.meta.url));
 	await withLibrary(
 		["Protected scan"],
-		async (url) => {
+		async (url, books) => {
+			const id = await firstBookId(page.request, url);
+			const db = new DatabaseSync(join(books, "../state/book-text.sqlite3"), {
+				readOnly: true,
+			});
+			try {
+				const record = db.prepare(
+					"SELECT body FROM prepared_pages WHERE book=?",
+				);
+				await expect.poll(() => record.get(id)).toEqual({ body: null });
+				expect(
+					(await page.request.get(`${url}/api/books/${id}/text`)).status(),
+				).toBe(404);
+				expect(
+					(
+						await page.request.post(`${url}/api/books/${id}/matches`, {
+							data: { query: "paper" },
+						})
+					).status(),
+				).toBe(404);
+			} finally {
+				db.close();
+			}
 			await page.goto(url);
 			await page.locator(".book").click();
 			const password = page.getByLabel("PDF password", { exact: true });
@@ -913,7 +951,7 @@ test("resolves fine scan lines when zooming and keeps panned detail inside its p
 		async (url) => {
 			await page.goto(url);
 			await page.locator(".book").click();
-			const first = page.getByRole("img", { name: "Page 1", exact: true });
+			const first = page.getByRole("group", { name: "Page 1", exact: true });
 			await expect(first.locator("canvas")).toBeVisible();
 			for (let i = 0; i < 4; i++) await page.keyboard.press("+");
 			const detail = first.locator(".page-detail");
@@ -1046,7 +1084,7 @@ test("loads covers without opening a PDF and shows the saved page before PDF.js 
 			}
 			await expect(
 				page
-					.getByRole("img", { name: "Page 2", exact: true })
+					.getByRole("group", { name: "Page 2", exact: true })
 					.locator("canvas"),
 			).toBeVisible();
 		},

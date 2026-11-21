@@ -174,7 +174,7 @@ test("presses book cards and controls into the surface", async ({ page }) => {
 		expect(pressedSize.width).toBeCloseTo(restingSize.width, 2);
 		expect(pressedSize.height).toBeCloseTo(restingSize.height, 2);
 		await page.mouse.up();
-		const first = page.getByRole("img", { name: "Page 1", exact: true });
+		const first = page.getByRole("group", { name: "Page 1", exact: true });
 		await expect(first.locator("canvas")).toBeVisible();
 
 		await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
@@ -245,7 +245,7 @@ test("scrolls through a bounded shelf and restores the filter", async ({
 			await page.getByRole("link", { name: "Sample 110" }).click();
 			await expect(
 				page
-					.getByRole("img", { name: "Page 1", exact: true })
+					.getByRole("group", { name: "Page 1", exact: true })
 					.locator("canvas"),
 			).toBeVisible();
 			await returnToLibrary(page);
@@ -390,7 +390,9 @@ test("opens a PDF at phone width, reads down, and resumes at the saved page", as
 			page.getByRole("heading", { name: "The Shape of Quiet" }),
 		).toBeAttached();
 		await expect(
-			page.getByRole("img", { name: "Page 1", exact: true }).locator("canvas"),
+			page
+				.getByRole("group", { name: "Page 1", exact: true })
+				.locator("canvas"),
 		).toBeVisible();
 		await expect(page.locator(".page-position")).toHaveText("Page 1 of 8");
 		await page.screenshot({ path: info.outputPath("iphone-reader.png") });
@@ -407,7 +409,9 @@ test("opens a PDF at phone width, reads down, and resumes at the saved page", as
 		await page.getByRole("link", { name: /The Shape of Quiet/ }).click();
 		await expect(page.locator(".page-position")).toHaveText("Page 3 of 8");
 		await expect(
-			page.getByRole("img", { name: "Page 3", exact: true }).locator("canvas"),
+			page
+				.getByRole("group", { name: "Page 3", exact: true })
+				.locator("canvas"),
 		).toBeVisible();
 		await page.locator(".reader-scroll").evaluate((area) => {
 			area.scrollTop = area.scrollHeight;
@@ -427,7 +431,7 @@ test("fits a whole page and keeps the controls out of the reading area", async (
 		await page.getByRole("link", { name: "The Shape of Quiet" }).click();
 		const reader = page.getByRole("main", { name: "PDF pages" });
 		const header = page.locator(".reader-header");
-		const first = page.getByRole("img", { name: "Page 1", exact: true });
+		const first = page.getByRole("group", { name: "Page 1", exact: true });
 		const toggle = page.getByRole("button", { name: "Reader controls" });
 		const library = page.getByRole("link", { name: "Library", exact: true });
 		await expect(first.locator("canvas")).toBeVisible();
@@ -612,7 +616,7 @@ test("toggles the reader controls by tapping a page", async ({ browser }) => {
 		await withLibrary(["The Shape of Quiet"], async (url) => {
 			await page.goto(url);
 			await page.getByRole("link", { name: "The Shape of Quiet" }).tap();
-			const first = page.getByRole("img", { name: "Page 1", exact: true });
+			const first = page.getByRole("group", { name: "Page 1", exact: true });
 			const library = page.getByRole("link", { name: "Library", exact: true });
 			await expect(first.locator("canvas")).toBeVisible();
 			await expect(library).toBeHidden();
@@ -638,7 +642,7 @@ test("keeps the paper under a fast scroll across pages and back while zoomed", a
 			await page.locator(".book").click();
 			await expect(
 				page
-					.getByRole("img", { name: "Page 1", exact: true })
+					.getByRole("group", { name: "Page 1", exact: true })
 					.locator("canvas")
 					.first(),
 			).toBeVisible();
@@ -683,10 +687,10 @@ test("settles near fitted page starts in both directions and scrolls freely insi
 		await page.goto(url);
 		await page.getByRole("link", { name: "The Shape of Quiet" }).click();
 		const reader = page.getByRole("main", { name: "PDF pages" });
-		const first = page.getByRole("img", { name: "Page 1", exact: true });
-		const second = page.getByRole("img", { name: "Page 2", exact: true });
+		const first = page.getByRole("group", { name: "Page 1", exact: true });
+		const second = page.getByRole("group", { name: "Page 2", exact: true });
 		await expect(first.locator("canvas")).toBeVisible();
-		const fourth = page.getByRole("img", { name: "Page 4", exact: true });
+		const fourth = page.getByRole("group", { name: "Page 4", exact: true });
 		const start = await second.evaluate(
 			(surface: HTMLElement) => surface.offsetTop,
 		);
@@ -758,7 +762,7 @@ for (const mode of ["reader zoom", "reduced motion"] as const) {
 				await page.keyboard.press("+");
 				await expect(page.locator(".reader-magnification")).toHaveText("1.5×");
 			}
-			const paper = page.getByRole("img", { name: "Page 2", exact: true });
+			const paper = page.getByRole("group", { name: "Page 2", exact: true });
 			const target = await paper.evaluate(
 				(el: HTMLElement) => el.offsetTop - 24,
 			);
@@ -793,7 +797,7 @@ test("holds the reading point on returning to fit and snaps on the next page tur
 		await expect(reader.locator("canvas").first()).toBeVisible();
 		await page.keyboard.press("+");
 		await expect(page.locator(".reader-magnification")).toHaveText("1.5×");
-		const paper = page.getByRole("img", { name: "Page 2", exact: true });
+		const paper = page.getByRole("group", { name: "Page 2", exact: true });
 		const expectedTop = await paper.evaluate((sheet) => {
 			const pane = sheet.closest("main");
 			if (!pane) throw new Error("Missing reading area");
@@ -822,7 +826,7 @@ test("holds the reading point on returning to fit and snaps on the next page tur
 		}, expectedTop);
 		expect(drift).toBeLessThan(2);
 		const next = await page
-			.getByRole("img", { name: "Page 3", exact: true })
+			.getByRole("group", { name: "Page 3", exact: true })
 			.evaluate((el: HTMLElement) => el.offsetTop);
 		const current = await reader.evaluate((pane) => pane.scrollTop);
 		await reader.hover();
@@ -885,7 +889,7 @@ test("renders the first page of a large PDF with partial responses", async ({
 			await book.click();
 			await expect(
 				page
-					.getByRole("img", { name: "Page 1", exact: true })
+					.getByRole("group", { name: "Page 1", exact: true })
 					.locator("canvas"),
 			).toBeVisible();
 			expect(partialBytes).toBeGreaterThan(0);
@@ -937,7 +941,7 @@ test("leaving a reader while the PDF module loads cancels its document request",
 			const cancelled = `${url}/api/books/${await book.getAttribute("id")}/pdf`;
 			await book.click();
 			await expect(
-				page.getByRole("img", { name: "Page 1", exact: true }),
+				page.getByRole("group", { name: "Page 1", exact: true }),
 			).toBeVisible();
 			await returnToLibrary(page);
 			await expect(book).toBeVisible();
@@ -948,7 +952,7 @@ test("leaving a reader while the PDF module loads cancels its document request",
 			await other.click();
 			await expect(
 				page
-					.getByRole("img", { name: "Page 1", exact: true })
+					.getByRole("group", { name: "Page 1", exact: true })
 					.locator("canvas")
 					.first(),
 			).toBeVisible();
