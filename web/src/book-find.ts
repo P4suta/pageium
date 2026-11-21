@@ -9,6 +9,8 @@ import { bookUrl } from "./api";
 import type { TextMatch } from "./page-content";
 import { PositionSearch } from "./position-search";
 
+export type FindAction = "query" | "next" | "previous" | "resume";
+
 // The PDF.js find controller reads page strings and uses the link service for page numbers.
 export interface FindSource {
 	getPage(number: number): Promise<{
@@ -146,8 +148,8 @@ export class BookFind {
 			({ pageIndex }: { pageIndex: number }) => {
 				if (pageIndex === -1 && !this.#controller.pageMatches?.length) {
 					matches = "";
-					publish();
-				} else if (pageIndex === lastPage) {
+				}
+				if (pageIndex === -1 || pageIndex === lastPage) {
 					publish();
 				}
 				refresh();
@@ -155,14 +157,12 @@ export class BookFind {
 		);
 	}
 
-	async search(
-		query: string,
-		again: boolean,
-		previous: boolean,
-	): Promise<void> {
+	async search(query: string, action: FindAction): Promise<void> {
 		const request = ++this.#request;
 		const source = await this.#source;
 		if (request !== this.#request) return;
+		const previous = action === "previous";
+		const again = previous || action === "next";
 		if (source === "positions" && !this.#useOriginal) {
 			const found = await this.#positions.search(query, again, previous);
 			if (found || request !== this.#request) return;
@@ -171,7 +171,7 @@ export class BookFind {
 		}
 		this.#events.dispatch("find", {
 			source: this,
-			type: again ? "again" : "",
+			type: again ? "again" : action === "resume" ? "highlightallchange" : "",
 			query,
 			findPrevious: previous,
 			highlightAll: true,

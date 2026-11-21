@@ -17,6 +17,15 @@ async function openBook(page: Page, url: string) {
 	return id;
 }
 
+async function reopenSearch(page: Page) {
+	await page.keyboard.press("Escape");
+	await expect(
+		page.getByRole("searchbox", { name: "Find in book" }),
+	).toBeHidden();
+	await expect(page.locator(".page-text mark")).toHaveCount(0);
+	await page.keyboard.press("Control+f");
+}
+
 for (const colorScheme of ["light", "dark"] as const) {
 	test(`matches the ${colorScheme} shelf and reader controls`, async ({
 		page,
@@ -157,6 +166,8 @@ test("finds Japanese across text runs and selects the OCR match on the next page
 			await expect(page.getByText("2 of 2 matches")).toBeVisible();
 			const second = page.getByRole("group", { name: "Page 2", exact: true });
 			await expect(second.locator("mark")).toHaveText("日本語");
+			await reopenSearch(page);
+			await expect(page.getByText("2 of 2 matches")).toBeVisible();
 			await expect(second.locator("mark")).toBeInViewport();
 			await query.press("Shift+Enter");
 			await expect(first.locator("mark").first()).toBeInViewport();
@@ -172,6 +183,7 @@ test("finds Japanese across text runs and selects the OCR match on the next page
 			await expect(page.getByRole("main", { name: "PDF pages" })).toBeFocused();
 			await page.keyboard.press("Meta+f");
 			await expect(query).toBeFocused();
+			await expect(page.getByText("No matches", { exact: true })).toBeVisible();
 		},
 		annotatedBook(),
 	);
@@ -411,6 +423,9 @@ test("searches a copy-restricted book by position without serving its page text"
 			await expect(page.getByText("1 of 2 matches")).toBeVisible();
 			await expect(page.locator(".page-text mark")).toHaveText(["日本", "語"]);
 			await input.press("Enter");
+			await expect(page.getByText("2 of 2 matches")).toBeVisible();
+			await expect(page.locator(".page-text mark")).toHaveText("日本語");
+			await reopenSearch(page);
 			await expect(page.getByText("2 of 2 matches")).toBeVisible();
 			await expect(page.locator(".page-text mark")).toHaveText("日本語");
 			await input.press("Shift+Enter");

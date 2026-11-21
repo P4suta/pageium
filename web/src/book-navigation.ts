@@ -1,5 +1,5 @@
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import type { BookFind } from "./book-find";
+import type { BookFind, FindAction } from "./book-find";
 import { element, icon } from "./dom";
 import { PageContent } from "./page-content";
 import {
@@ -86,15 +86,15 @@ export class BookNavigation {
 		this.#input.addEventListener("keydown", (event) => {
 			if (event.key === "Enter" && !event.isComposing && !this.#composing) {
 				event.preventDefault();
-				void this.#search(true, event.shiftKey);
+				void this.#search(event.shiftKey ? "previous" : "next");
 			}
 		});
 		this.#previous.disabled = this.#next.disabled = true;
 		this.#previous.addEventListener(
 			"click",
-			() => void this.#search(true, true),
+			() => void this.#search("previous"),
 		);
-		this.#next.addEventListener("click", () => void this.#search(true));
+		this.#next.addEventListener("click", () => void this.#search("next"));
 		this.#findPanel.id = "book-find";
 		this.#findPanel.setAttribute("aria-label", "Find in book");
 		this.#status.setAttribute("role", "status");
@@ -136,13 +136,15 @@ export class BookNavigation {
 	}
 
 	#open(panel: HTMLElement): void {
-		if (panel.hidden) this.#hide();
+		const opening = panel.hidden;
+		if (opening) this.#hide();
 		this.hideHeader();
 		panel.hidden = false;
 		if (panel === this.#findPanel) {
 			this.#findButton.setAttribute("aria-expanded", "true");
 			this.#input.focus({ preventScroll: true });
 			this.#input.select();
+			if (opening && this.#query) void this.#search("resume");
 			this.#refresh();
 		} else {
 			this.#contentsButton.setAttribute("aria-expanded", "true");
@@ -195,9 +197,9 @@ export class BookNavigation {
 		return false;
 	}
 
-	async #search(again = false, previous = false): Promise<void> {
+	async #search(action: FindAction = "query"): Promise<void> {
 		const query = this.#input.value;
-		if (!again && this.#query === query) return;
+		if (action === "query" && this.#query === query) return;
 		const request = ++this.#searchRequest;
 		this.#query = query;
 		this.#revealPage = 0;
@@ -208,7 +210,7 @@ export class BookNavigation {
 			this.#refresh();
 			return;
 		}
-		this.#status.textContent = "Searching…";
+		if (action !== "resume") this.#status.textContent = "Searching…";
 		try {
 			if (!this.#find) {
 				const { BookFind } = await import("./book-find");
@@ -233,7 +235,7 @@ export class BookNavigation {
 					},
 				);
 			}
-			await this.#find.search(query, again, previous);
+			await this.#find.search(query, action);
 		} catch {
 			if (request === this.#searchRequest)
 				this.#status.textContent = "Search unavailable";
