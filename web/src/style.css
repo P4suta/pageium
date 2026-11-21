@@ -306,7 +306,7 @@ h1:focus {
 	min-inline-size: 0;
 	max-inline-size: 100%;
 	overflow-wrap: anywhere;
-	color: light-dark(black, white);
+	color: var(--ink);
 	font-size: 1.125rem;
 	line-height: 1.5;
 }
@@ -345,8 +345,10 @@ h1:focus {
 .folder-link {
 	gap: 0.75rem;
 	padding: 0.5rem 0.875rem;
-	border: 1px solid currentColor;
-	border-radius: 0.75rem;
+	border: 1px solid transparent;
+	border-radius: 24px;
+	background: var(--base);
+	box-shadow: var(--control-depth);
 	scroll-margin-block: 7rem 1rem;
 }
 
@@ -737,6 +739,7 @@ h1:focus {
 
 :is(
 	.book,
+	.folder-link,
 	.library-link,
 	.reader-controls-toggle,
 	.reader-fit,
@@ -758,6 +761,7 @@ h1:focus {
 
 	:is(
 		.book,
+		.folder-link,
 		.library-link,
 		.reader-controls-toggle,
 		.reader-fit,
