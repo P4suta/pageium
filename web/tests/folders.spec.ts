@@ -111,6 +111,35 @@ test("browses nested folders and returns to the search that opened a book", asyn
 				page.getByRole("heading", { name, exact: true, level: 1 });
 			await expect(link("Loose")).toBeVisible();
 			await expect(page.locator(".book")).toHaveCount(1);
+			const folder = link("小説");
+			const rescan = page.getByRole("button", { name: "Rescan library" });
+			for (const colorScheme of ["light", "dark"] as const) {
+				const reducedMotion =
+					colorScheme === "dark" ? "reduce" : "no-preference";
+				await page.emulateMedia({ colorScheme, reducedMotion });
+				for (const property of [
+					"color",
+					"background-color",
+					"border-radius",
+					"box-shadow",
+				]) {
+					const expected = await rescan.evaluate(
+						(el, name) => getComputedStyle(el).getPropertyValue(name),
+						property,
+					);
+					await expect(folder).toHaveCSS(property, expected);
+				}
+				await folder.hover();
+				await page.mouse.down();
+				await expect(folder).toHaveCSS("box-shadow", /inset/);
+				await expect(folder).toHaveCSS(
+					"transform",
+					reducedMotion === "reduce" ? "none" : "matrix(1, 0, 0, 1, 0, 2)",
+				);
+				await page.mouse.up();
+				await expect(heading("小説")).toBeVisible();
+				await page.goBack();
+			}
 			await link("小説").focus();
 			await link("小説").press("Enter");
 			await expect(heading("小説")).toBeFocused();
