@@ -11,6 +11,7 @@ import {
 	previewUrl,
 	savePosition,
 } from "./api";
+import type { BookNavigation } from "./book-navigation";
 import { element, message } from "./dom";
 import { backToShelf, type ShelfLocation } from "./location";
 import {
@@ -23,6 +24,7 @@ import {
 	type Raster,
 	visibleReadingArea,
 } from "./pdf";
+import type { PagePoint } from "./pdf-destinations";
 import { PaperZoom } from "./zoom";
 
 interface PageLayer {
@@ -48,7 +50,7 @@ interface PagePaint {
 
 function pageSlot(number: number): PageSlot {
 	const surface = element("div", "pdf-page");
-	surface.setAttribute("role", "img");
+	surface.setAttribute("role", "group");
 	surface.setAttribute("aria-label", `Page ${number}`);
 	surface.dataset.status = `Loading page ${number}…`;
 	return {
@@ -118,6 +120,7 @@ export class Reader {
 	#notice = element("span", "save-notice");
 	#loading: PDFDocumentLoadingTask | null = null;
 	#document: PDFDocumentProxy | null = null;
+	#navigation: BookNavigation | null = null;
 	#slots: PageSlot[] = [];
 	#near = new Set<PageSlot>();
 	#wanted: PageSlot[] = [];
@@ -133,6 +136,7 @@ export class Reader {
 	#area: ReadingArea | null = null;
 	#defaultRatio = "";
 	#active = 0;
+	#positionedPage: PageSlot | null = null;
 	#enteredPageAt = 0;
 	#scrollTop = 0;
 	#scrollTimer = 0;
@@ -209,11 +213,29 @@ export class Reader {
 			});
 		});
 
-		this.#scroll.addEventListener("click", () => {
-			if (this.#document) {
+		this.#scroll.addEventListener("click", (event) => {
+			if (
+				this.#document &&
+				!(event.target instanceof Element && event.target.closest("a")) &&
+				window.getSelection()?.isCollapsed !== false
+			) {
 				this.#setControls(this.#controls === "hidden" ? "shown" : "hidden");
 			}
 		});
+		this.#scroll.addEventListener(
+			"wheel",
+			(event) => {
+				if (event.deltaY && !event.ctrlKey) this.#resumeScrollTracking();
+			},
+			{ passive: true },
+		);
+		this.#scroll.addEventListener(
+			"touchmove",
+			(event) => {
+				if (event.touches.length === 1) this.#resumeScrollTracking();
+			},
+			{ passive: true },
+		);
 		this.view.addEventListener("pointermove", this.#onPointerMove, {
 			passive: true,
 		});
@@ -236,7 +258,10 @@ export class Reader {
 			const pdf = await this.#loading.promise;
 			if (this.#closed) return;
 			const start = Math.min(pdf.numPages, this.book.progress?.page ?? 1);
-			const first = await pdf.getPage(start);
+			const [first, { BookNavigation }] = await Promise.all([
+				pdf.getPage(start),
+				import("./book-navigation"),
+			]);
 			if (this.#closed) return;
 			const shape = first.getViewport({ scale: 1 });
 			this.#defaultRatio = String(shape.width / shape.height);
@@ -262,6 +287,16 @@ export class Reader {
 			anchor.surface.style.setProperty("--page-ratio", this.#defaultRatio);
 			anchor.page = first;
 			this.#document = pdf;
+			this.#navigation = new BookNavigation(
+				pdf,
+				this.book.id,
+				() => this.#active,
+				(number, point, page) => this.#goToPage(number, point, page),
+				() => this.#setControls("hidden"),
+				() => this.#scroll.focus({ preventScroll: true }),
+			);
+			this.#actions.append(this.#navigation.tools);
+			this.view.append(this.#navigation.panels);
 			this.view.classList.add("reader--reading");
 			this.#tools.hidden = false;
 			this.#toggle.hidden = false;
@@ -272,6 +307,7 @@ export class Reader {
 			const resume = this.#slots[start - 1];
 			if (resume) this.#scroll.scrollTop = resume.surface.offsetTop;
 			this.#scrollTop = this.#scroll.scrollTop;
+			this.#positionedPage = anchor;
 			this.#scroll.addEventListener("scroll", this.#onScroll, {
 				passive: true,
 			});
@@ -307,7 +343,11 @@ export class Reader {
 		if (!this.#document || event.pointerType !== "mouse" || event.buttons !== 0)
 			return;
 		const nearHeader =
-			event.clientY < this.#headerHeight + controlsRevealMargin;
+			event.clientY < this.#headerHeight + controlsRevealMargin &&
+			!(
+				event.target instanceof Element &&
+				event.target.closest(".page-text span, .page-links a, .book-panels")
+			);
 		const approachedHeader = nearHeader && !this.#pointerNearHeader;
 		this.#pointerNearHeader = nearHeader;
 		if (approachedHeader && this.#controls === "hidden") {
@@ -421,7 +461,27 @@ export class Reader {
 	};
 
 	#onKeyDown = (event: KeyboardEvent): void => {
+		if (
+			event.defaultPrevented ||
+			this.#navigation?.handleKey(event) ||
+			event.isComposing ||
+			event.target instanceof HTMLInputElement
+		)
+			return;
 		if (event.ctrlKey || event.metaKey || event.altKey) return;
+		if (
+			[
+				"ArrowUp",
+				"ArrowDown",
+				"PageUp",
+				"PageDown",
+				"Home",
+				"End",
+				" ",
+			].includes(event.key) &&
+			event.target === this.#scroll
+		)
+			this.#resumeScrollTracking();
 		if (["+", "=", "-", "0"].includes(event.key)) {
 			event.preventDefault();
 			if (event.key === "0") this.#zoom.reset();
@@ -456,6 +516,8 @@ export class Reader {
 	}
 
 	#disconnect(): void {
+		this.#navigation?.close();
+		this.#navigation = null;
 		cancelAnimationFrame(this.#frame);
 		this.#frame = 0;
 		this.#zoom.disconnect();
@@ -523,6 +585,7 @@ export class Reader {
 			this.#setControls("hidden");
 		}
 		if (top !== this.#scrollTop) {
+			this.#positionedPage = null;
 			if (
 				area &&
 				this.#scroll.classList.contains("reader-scroll--free-pan") &&
@@ -665,6 +728,49 @@ export class Reader {
 			if (next) this.#preview(next);
 		}
 		this.#renderNext(visible, adjacent);
+		this.#navigation?.showPages(visible);
+	}
+
+	#goToPage(number: number, point?: PagePoint, page?: PDFPageProxy): void {
+		const slot = this.#slots[number - 1];
+		if (!slot || this.#closed) return;
+		this.#positionedPage = null;
+		this.#zoom.settle();
+		this.#scroll.classList.add("reader-scroll--free-pan");
+		if (page) {
+			slot.page = page;
+			const shape = page.getViewport({ scale: 1 });
+			this.#sizePage(slot, String(shape.width / shape.height));
+			this.#applyPageSizes();
+		}
+		if (!this.#wanted.includes(slot)) {
+			this.#scroll.scrollTop = slot.surface.offsetTop;
+			this.#scrollTop = this.#scroll.scrollTop;
+			this.#layout();
+		}
+		const rect = slot.surface.getBoundingClientRect();
+		const bounds = visibleReadingArea(this.#scroll);
+		const top = this.#scroll.scrollTop + rect.top - bounds.top;
+		const inset = Math.min(120, (bounds.bottom - bounds.top) / 4);
+		this.#scroll.scrollTo({
+			top: top + Math.max(0, Math.min(1, point?.y ?? 0) * rect.height - inset),
+			left:
+				this.#scroll.scrollLeft +
+				rect.left -
+				bounds.left +
+				Math.max(0, Math.min(1, point?.x ?? 0)) * rect.width -
+				(bounds.right - bounds.left) / 4,
+			behavior: "instant",
+		});
+		this.#scrollTop = this.#scroll.scrollTop;
+		this.#positionedPage = slot;
+		this.#requestLayout();
+	}
+
+	#resumeScrollTracking(): void {
+		if (!this.#positionedPage) return;
+		this.#positionedPage = null;
+		this.#requestLayout();
 	}
 
 	#sizeNearby(nearby: PageSlot[]): void {
@@ -684,6 +790,14 @@ export class Reader {
 	}
 
 	#activeIndex(top: number): number {
+		const target = this.#positionedPage;
+		if (
+			target &&
+			top === this.#scrollTop &&
+			target.surface.offsetTop < top + this.#scroll.clientHeight &&
+			target.surface.offsetTop + target.surface.offsetHeight > top
+		)
+			return target.number - 1;
 		return this.#atEnd()
 			? this.#slots.length - 1
 			: this.#indexAt(top + Math.min(this.#scroll.clientHeight / 4, 120));
@@ -794,6 +908,7 @@ export class Reader {
 		const { slot } = paint;
 		let raster: Raster | null = requested;
 		const canvas = element("canvas");
+		canvas.setAttribute("aria-hidden", "true");
 		try {
 			const page = slot.page ?? (await pdf.getPage(slot.number));
 			if (!this.#wants(paint, area)) return;

@@ -43,6 +43,8 @@ pub(crate) fn router(service: Arc<Service>, web: &Path) -> Router {
         .route("/api/library/scan", post(scan_library))
         .route("/api/books/{id}", get(book))
         .route("/api/books/{id}/pdf", get(pdf).head(pdf))
+        .route("/api/books/{id}/text", get(book_text))
+        .route("/api/books/{id}/matches", post(book_matches))
         .route("/api/books/{id}/preview/{page}", get(preview))
         .route("/api/books/{id}/progress", put(save_position))
         .layer(DefaultBodyLimit::max(1024))
@@ -394,6 +396,55 @@ async fn open_pdf(service: &Service, id: &str) -> Result<(std::fs::File, u64), S
                 StatusCode::SERVICE_UNAVAILABLE
             }
         })
+}
+
+async fn book_text(
+    State(service): State<Arc<Service>>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Response, StatusCode> {
+    open_pdf(&service, &id).await?;
+    let text = service
+        .book_text
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let prepared = text
+        .get(id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(match prepared {
+        crate::book_text::Prepared::Pages(bytes) => {
+            ([(header::CONTENT_TYPE, "application/gzip")], bytes).into_response()
+        }
+        crate::book_text::Prepared::PositionsOnly => StatusCode::NO_CONTENT.into_response(),
+    })
+}
+
+#[derive(Deserialize)]
+struct FindQuery {
+    query: String,
+}
+
+async fn book_matches(
+    State(service): State<Arc<Service>>,
+    RoutePath(id): RoutePath<String>,
+    Json(request): Json<FindQuery>,
+) -> Result<Response, StatusCode> {
+    if request.query.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    open_pdf(&service, &id).await?;
+    let text = service
+        .book_text
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let matches = text
+        .matcher
+        .find(&id, &request.query)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(matches).into_response())
 }
 
 async fn preview(

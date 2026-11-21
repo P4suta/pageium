@@ -1,7 +1,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { fixturePdf, withLibrary } from "./fixtures";
+import { firstBookId, fixturePdf, withLibrary } from "./fixtures";
 
 function gate() {
 	let open!: () => void;
@@ -46,7 +46,7 @@ test("shows the latest page in the root resume link while saving a nested book",
 			await resume.click();
 			await expect(page.locator(".page-position")).toHaveText("Page 1 of 4");
 			await page
-				.getByRole("img", { name: "Page 2", exact: true })
+				.getByRole("group", { name: "Page 2", exact: true })
 				.evaluate((el) => el.scrollIntoView({ block: "start" }));
 			await expect(page.locator(".page-position")).toHaveText("Page 2 of 4");
 			await page.route("**/api/library?*", async (route) => {
@@ -84,6 +84,7 @@ test("browses nested folders and returns to the search that opened a book", asyn
 	await withLibrary(
 		["Loose"],
 		async (url, root) => {
+			await firstBookId(page.request, url);
 			for (const directory of [`小説/${branch}`, "卒論", "オライリー"]) {
 				await mkdir(join(root, directory), { recursive: true });
 			}
