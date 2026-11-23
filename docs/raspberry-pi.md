@@ -65,6 +65,43 @@ Zoom in to eight times the fitted size with a desktop trackpad pinch, the Zoom i
 The minus key zooms out and the zero key resets the zoom level.
 To stop the service while keeping the reading history, run `systemctl --user stop pageium.service`.
 
+## Upgrade and roll back
+
+Keep the running image and one previous image.
+When the storage reports `Supports shifting: false` in `podman info`, rootless Podman keeps an ID-mapped copy of each image that ran under `UserNS=keep-id`.
+Every retained image then costs its full size again.
+Check out the intended Pageium revision before building.
+Tag the running container's image as previous, build the candidate, and restart the service.
+Taking the tag from the running container keeps the working image even when an earlier attempt stopped after its build.
+If the container is absent because a candidate failed to start, roll back before upgrading again.
+
+```sh
+podman tag "$(podman container inspect --format '{{.Image}}' pageium)" localhost/pageium:previous
+podman build --platform linux/arm64 --tag localhost/pageium:local --file Containerfile .
+systemctl --user restart pageium.service
+curl -fsS http://127.0.0.1:8787/healthz
+```
+
+Open the library and a PDF.
+Then review the images that lost their last tag and remove them.
+The prune removes every untagged image in the app account's store, including other apps' images.
+
+```sh
+podman images --filter dangling=true
+podman image prune --force
+```
+
+If the candidate fails, restore the previous image and restart the service.
+
+```sh
+podman tag localhost/pageium:previous localhost/pageium:local
+systemctl --user restart pageium.service
+podman image prune --force
+```
+
+Keep both tags as the only names for Pageium images, so pruning removes every earlier image.
+[Podman image prune](https://docs.podman.io/en/latest/markdown/podman-image-prune.1.html), [Podman tag](https://docs.podman.io/en/latest/markdown/podman-tag.1.html)
+
 ## Verify a development build
 
 Install Poppler so the server can run `pdftoppm` when serving previews outside the container.
