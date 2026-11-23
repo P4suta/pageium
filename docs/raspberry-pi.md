@@ -70,19 +70,24 @@ To stop the service while keeping the reading history, run `systemctl --user sto
 Keep the running image and one previous image.
 When the storage reports `Supports shifting: false` in `podman info`, rootless Podman keeps an ID-mapped copy of each image that ran under `UserNS=keep-id`.
 Every retained image then costs its full size again.
-Move the previous tag to the running image, build the candidate, and restart the service.
+Check out the intended Pageium revision before building.
+Tag the running container's image as previous, build the candidate, and restart the service.
+Taking the tag from the running container keeps the working image even when an earlier attempt stopped after its build.
+If the container is absent because a candidate failed to start, roll back before upgrading again.
 
 ```sh
-podman tag localhost/pageium:local localhost/pageium:previous
+podman tag "$(podman container inspect --format '{{.Image}}' pageium)" localhost/pageium:previous
 podman build --platform linux/arm64 --tag localhost/pageium:local --file Containerfile .
 systemctl --user restart pageium.service
 curl -fsS http://127.0.0.1:8787/healthz
 ```
 
 Open the library and a PDF.
-Then remove the image that lost its last tag.
+Then review the images that lost their last tag and remove them.
+The prune removes every untagged image in the app account's store, including other apps' images.
 
 ```sh
+podman images --filter dangling=true
 podman image prune --force
 ```
 
